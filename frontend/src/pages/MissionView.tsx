@@ -1,4 +1,5 @@
 import React, { useState, Suspense } from 'react';
+import Markdown from 'react-markdown';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   useMission, useMissionEnvironment, useMissionPlans, useRovers,
@@ -835,14 +836,40 @@ export function MissionView() {
                       <p style={{ fontSize: 11, color: 'var(--accent-red)', margin: 0 }}>{llm.error}</p>
                     )}
                     {llm.text && (
-                      <p style={{
-                        fontSize: 12, color: 'var(--text)', lineHeight: 1.6,
-                        margin: 0, fontStyle: 'italic',
-                        borderLeft: '2px solid var(--accent)', paddingLeft: 10,
+                      <div style={{
+                        borderLeft: '2px solid var(--accent)', paddingLeft: 12,
+                        fontSize: 12, color: 'var(--text)', lineHeight: 1.7,
                       }}>
-                        {llm.text}
-                        {llm.loading && <span style={{ color: 'var(--accent)', animation: 'none' }}>▌</span>}
-                      </p>
+                        <Markdown
+                          components={{
+                            p:      ({ children }) => <p style={{ margin: '0 0 8px 0' }}>{children}</p>,
+                            h1:     ({ children }) => <h1 style={{ fontSize: 14, fontWeight: 800, color: 'var(--accent)', margin: '12px 0 6px 0' }}>{children}</h1>,
+                            h2:     ({ children }) => <h2 style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent)', margin: '10px 0 5px 0' }}>{children}</h2>,
+                            h3:     ({ children }) => <h3 style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-sec)', margin: '8px 0 4px 0' }}>{children}</h3>,
+                            ul:     ({ children }) => <ul style={{ margin: '4px 0 8px 0', paddingLeft: 18 }}>{children}</ul>,
+                            ol:     ({ children }) => <ol style={{ margin: '4px 0 8px 0', paddingLeft: 18 }}>{children}</ol>,
+                            li:     ({ children }) => <li style={{ marginBottom: 3 }}>{children}</li>,
+                            strong: ({ children }) => <strong style={{ color: 'var(--text)', fontWeight: 700 }}>{children}</strong>,
+                            em:     ({ children }) => <em style={{ color: 'var(--text-sec)' }}>{children}</em>,
+                            code:   ({ children }) => (
+                              <code style={{
+                                background: 'var(--surface)', border: '1px solid var(--border)',
+                                borderRadius: 3, padding: '1px 5px', fontSize: 11,
+                                color: 'var(--accent-green)', fontFamily: 'monospace',
+                              }}>{children}</code>
+                            ),
+                            blockquote: ({ children }) => (
+                              <blockquote style={{
+                                borderLeft: '2px solid var(--border-strong)', margin: '6px 0',
+                                paddingLeft: 10, color: 'var(--text-sec)',
+                              }}>{children}</blockquote>
+                            ),
+                          }}
+                        >
+                          {llm.text}
+                        </Markdown>
+                        {llm.loading && <span style={{ color: 'var(--accent)' }}>▌</span>}
+                      </div>
                     )}
                   </div>
                 </>

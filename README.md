@@ -565,7 +565,7 @@ Severity levels: `low`, `medium`, `high`, `critical`. All anomalies are persiste
 ### V3
 - [x] Reinforcement Learning planner — greedy value-function policy; select A* or RL per-rover in the UI; hot-swap ready for trained weights
 - [x] Multi-agent planning — "Coordinate All Rovers" distributes objectives across rovers via greedy distance assignment, generates independent A* plans per rover
-- [x] Claude API integration — streaming SSE explanation in the Explain tab; set `ANTHROPIC_API_KEY` to activate; falls back gracefully if unset
+- [x] Claude API integration — streaming SSE explanation in the Explain tab; set `ANTHROPIC_API_KEY` to activate; falls back gracefully if unset; response rendered as Markdown (headings, lists, bold, code, blockquotes) via `react-markdown`
 - [x] Physics-based terrain — elevation map (multi-octave noise), slope-adjusted movement cost, temperature-aware anomaly probability
 - [x] 3D visualization — React Three Fiber terrain canvas, per-cell meshes with elevation extrusion, location-pin rover markers with bob animation and shadow ring, hover tooltips (lazy-loaded in "3D" tab)
 - [x] Anomalies tab — full anomaly history with sort (newest / oldest / severity) and filter (status / type / severity) controls; sidebar shows only active anomalies newest-first with direct dismiss actions; Anomalies tab button shows live badge count
@@ -610,6 +610,8 @@ CLAUDE_MODEL=claude-sonnet-4-6   # default
 ```
 
 The `GET /api/v1/explain/llm/{subject}/{id}` endpoint streams a Server-Sent Events response. In the UI, click **Ask Claude** in the Explain tab. If the key is absent, the endpoint returns a plain-text fallback message — no errors or crashes.
+
+The streamed response is rendered as Markdown using `react-markdown` with theme-matched component overrides (see `MissionView.tsx` → Claude Analysis section). Claude should return Markdown — prompts in `_build_llm_context()` already encourage structured output with headings and lists.
 
 To extend the context Claude receives, edit `_build_llm_context()` in `explainability_service/service.py`. The method returns a plain string that is passed directly as the user message.
 
