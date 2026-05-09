@@ -57,8 +57,9 @@ function RoverPanel({
   planPending: boolean;
   runPending: boolean;
 }) {
-  const canPlan = missionStatus === 'active';
-  const canRun  = missionStatus === 'active' && !!plan;
+  const isExecuting = ['moving', 'sampling', 'stuck'].includes(rover.state);
+  const canPlan = missionStatus === 'active' && !isExecuting;
+  const canRun  = missionStatus === 'active' && !!plan && !isExecuting;
 
   return (
     <div style={{
@@ -78,7 +79,7 @@ function RoverPanel({
             fontFamily: 'inherit', fontWeight: 600,
           }}
         >
-          {planPending ? 'Planning…' : plan ? `Plan (${plan.total_commands} steps)` : 'Auto Plan (A*)'}
+          {planPending ? 'Planning…' : isExecuting ? `Plan (${plan?.total_commands ?? '…'} steps)` : plan ? `Plan (${plan.total_commands} steps)` : 'Auto Plan (A*)'}
         </button>
         <button
           onClick={() => plan && onRun(plan.id)}
@@ -91,7 +92,7 @@ function RoverPanel({
             fontFamily: 'inherit', fontWeight: 600,
           }}
         >
-          {runPending ? 'Starting…' : 'Execute Plan'}
+          {isExecuting ? 'Executing…' : runPending ? 'Starting…' : 'Execute Plan'}
         </button>
       </div>
       {plan && (

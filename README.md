@@ -129,7 +129,7 @@ All developer commands are available via `make`. Run `make help` for the full li
 | `make dev` | Start backend + frontend in parallel |
 | `make dev-backend` | FastAPI server with hot-reload |
 | `make dev-frontend` | Vite dev server |
-| `make test` | Run all backend tests |
+| `make test` | Run all backend tests (24 total) |
 | `make test-verbose` | Tests with full output |
 | `make test-unit` | Unit tests only (A* + simulation) |
 | `make test-api` | API integration tests |
@@ -179,7 +179,7 @@ make docker-rebuild  # full rebuild
 ## Running Tests
 
 ```bash
-make test           # all tests (22 total)
+make test           # all tests (24 total)
 make test-verbose   # with full output
 make test-unit      # A* + simulation unit tests (fast)
 make test-api       # API integration tests
@@ -444,18 +444,15 @@ On first `make dev`, `create_tables()` runs automatically at startup (idempotent
 
 ## Switching the Event Bus (V1 → V2)
 
-The event bus is abstracted behind `core/events/bus.py`. To switch from in-memory to Redis Streams:
+The event bus is abstracted behind `core/events/bus.py`. Switch from in-memory to Redis Streams with a single env var — no code changes required:
 
-```python
-# In main.py, replace:
-bus = InMemoryEventBus()
-
-# With:
-from core.events.redis_bus import RedisStreamBus
-bus = RedisStreamBus(url=settings.redis_url)
+```bash
+# .env or shell export
+USE_REDIS=true
+REDIS_URL=redis://localhost:6379/0   # default; override if needed
 ```
 
-No other code changes required.
+`main.py` reads `USE_REDIS` at startup and activates `RedisStreamBus` automatically. If Redis is unreachable, it falls back to `InMemoryEventBus` and logs a warning.
 
 ---
 
@@ -493,7 +490,7 @@ Auto-recovery: stuck rovers are auto-retried once after a 1-second hold.
 - [x] Anomaly resolution workflow (Dismiss button → PATCH endpoint)
 - [x] Telemetry WebSocket push wired via event bus listener
 - [x] Plan step expansion (Show all / Show fewer toggle)
-- [x] 22 unit + integration tests
+- [x] 24 unit + integration tests
 
 ### V2
 - [x] SQLAlchemy async persistence (SQLite dev / PostgreSQL prod via `DATABASE_URL`)
