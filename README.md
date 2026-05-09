@@ -1,43 +1,44 @@
 # Enceladus Mission Control Center
 
-A production-grade space mission control system simulating rover operations on Enceladus — Saturn's ocean moon. Features a digital twin simulation engine, A* mission planning, real-time telemetry streaming, anomaly detection, and an explainability layer.
+A production-grade space mission control system simulating rover operations on Enceladus — Saturn's ocean moon. Features a physics-based digital twin simulation engine, A* and RL mission planning, multi-agent rover coordination, real-time telemetry streaming, anomaly detection, Claude-powered explanations, timeline playback, and a 3D terrain visualiser.
 
 ---
 
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Frontend (React)                          │
-│  Dashboard · Mission Planner · Grid Map · Telemetry · Timeline  │
-└──────────────────────┬──────────────────────────────────────────┘
-                       │ REST + WebSocket
-┌──────────────────────▼──────────────────────────────────────────┐
-│                    FastAPI Backend (V1: unified)                  │
-│                                                                   │
-│  ┌─────────────────┐  ┌──────────────────┐  ┌────────────────┐  │
-│  │ mission_service │  │ planning_service  │  │ sim_service    │  │
-│  │  CRUD + status  │  │  A* pathfinding   │  │  rover digital │  │
-│  │  environment gen│  │  Manual plans     │  │  twin executor │  │
-│  └─────────────────┘  └──────────────────┘  └────────────────┘  │
-│                                                                   │
-│  ┌─────────────────┐  ┌──────────────────────────────────────┐  │
-│  │telemetry_service│  │       explainability_service          │  │
-│  │  WebSocket push │  │  Structured logs · LLM-ready context  │  │
-│  │  Event history  │  │  Plan · Mission · Anomaly explain API │  │
-│  └─────────────────┘  └──────────────────────────────────────┘  │
-│                                                                   │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │              Event Bus (abstract)                         │   │
-│  │  V1: InMemoryEventBus  →  V2: RedisStreamBus             │   │
-│  └──────────────────────────────────────────────────────────┘   │
-└──────────────────────────────────────────────────────────────────┘
-                       │
-         ┌─────────────┴────────────┐
-    ┌────▼────┐               ┌────▼────┐
-    │ Redis   │               │Postgres │
-    │ Streams │               │  (V2)   │
-    └─────────┘               └─────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                          Frontend (React + TS)                        │
+│  Dashboard · Planner · Map (2D/3D) · Telemetry · Charts · Timeline  │
+│  Explain (Claude SSE) · 3D · Anomalies · Multi-rover coordination    │
+└───────────────────────────┬──────────────────────────────────────────┘
+                            │ REST + WebSocket + SSE
+┌───────────────────────────▼──────────────────────────────────────────┐
+│                     FastAPI Backend (unified process)                 │
+│                                                                       │
+│  ┌─────────────────┐  ┌────────────────────────┐  ┌───────────────┐  │
+│  │ mission_service │  │   planning_service      │  │ sim_service   │  │
+│  │  CRUD + status  │  │  A* · RL · Multi-agent  │  │ physics-based │  │
+│  │  elevation gen  │  │  Objective distribution  │  │ digital twin  │  │
+│  └─────────────────┘  └────────────────────────┘  └───────────────┘  │
+│                                                                       │
+│  ┌─────────────────┐  ┌────────────────────────────────────────────┐ │
+│  │telemetry_service│  │         explainability_service              │ │
+│  │  WebSocket push │  │  Structured logs · Claude API streaming     │ │
+│  │  Event history  │  │  Plan · Mission · Anomaly explain (SSE)     │ │
+│  └─────────────────┘  └────────────────────────────────────────────┘ │
+│                                                                       │
+│  ┌────────────────────────────────────────────────────────────────┐  │
+│  │                    Event Bus (abstract)                         │  │
+│  │    InMemoryEventBus (default)  →  RedisStreamBus (USE_REDIS)   │  │
+│  └────────────────────────────────────────────────────────────────┘  │
+└───────────────────────────────────────────────────────────────────────┘
+                            │
+            ┌───────────────┴───────────────┐
+       ┌────▼────┐                     ┌────▼────┐
+       │ Redis   │                     │Postgres │
+       │ Streams │                     │  (opt.) │
+       └─────────┘                     └─────────┘
 ```
 
 ### Domain Models
@@ -52,18 +53,18 @@ A production-grade space mission control system simulating rover operations on E
 | `Command` | Typed action (MOVE, COLLECT_SAMPLE, WAIT, CHARGE, ABORT) |
 | `TelemetryEvent` | Timestamped rover data snapshot |
 | `Anomaly` | Detected failure with type, severity, and recovery hooks |
-| `Environment` | Grid world — terrain, geysers, hazard zones |
-| `Grid / Cell` | 2D terrain grid with per-cell movement cost |
+| `Environment` | Grid world — terrain, geysers, hazard zones, temperature, pressure |
+| `Grid / Cell` | 2D terrain grid with per-cell movement cost and elevation |
 
 ### Service Responsibilities
 
-| Service | Port (standalone) | Responsibility |
+| Service | Prefix | Responsibility |
 |---|---|---|
-| `mission_service` | `/api/v1/missions` | Mission CRUD, environment generation |
-| `planning_service` | `/api/v1/planning` | A* pathfinding, plan generation |
-| `simulation_service` | `/api/v1/simulation` | Rover spawn, plan execution loop |
-| `telemetry_service` | `/api/v1/telemetry` | WebSocket push, event history |
-| `explainability_service` | `/api/v1/explain` | Decision rationale, LLM context |
+| `mission_service` | `/api/v1/missions` | Mission CRUD, physics-based elevation terrain generation |
+| `planning_service` | `/api/v1/planning` | A* pathfinding, RL value-function planner, multi-agent objective distribution |
+| `simulation_service` | `/api/v1/simulation` | Rover spawn, physics-aware plan execution, anomaly injection |
+| `telemetry_service` | `/api/v1/telemetry` | WebSocket push, event history, anomaly resolution |
+| `explainability_service` | `/api/v1/explain` | Structured decision logs, Claude API streaming explanations (SSE) |
 
 ---
 
@@ -223,10 +224,11 @@ ROVER=$(curl -s -X POST $BASE/simulation/rovers -H "Content-Type: application/js
 }")
 ROVER_ID=$(echo $ROVER | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
 
-# 4. Generate A* plan
+# 4. Generate a plan (planner: "astar" or "rl")
 PLAN=$(curl -s -X POST $BASE/planning/auto -H "Content-Type: application/json" -d "{
   \"mission_id\": \"$MISSION_ID\",
-  \"rover_id\": \"$ROVER_ID\"
+  \"rover_id\": \"$ROVER_ID\",
+  \"planner\": \"astar\"
 }")
 PLAN_ID=$(echo $PLAN | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
 
@@ -247,6 +249,45 @@ curl -s $BASE/explain/plan/$PLAN_ID | python3 -m json.tool
 
 # 9. Mission summary
 curl -s $BASE/explain/mission/$MISSION_ID | python3 -m json.tool
+```
+
+---
+
+## V3 Workflow (Multi-Rover + AI)
+
+```bash
+BASE=http://localhost:8000/api/v1
+
+# 1–3: same as V1 workflow above (create mission, start, spawn rovers)
+#      Spawn a second rover to enable multi-agent coordination:
+curl -s -X POST $BASE/simulation/rovers -H "Content-Type: application/json" -d "{
+  \"mission_id\": \"$MISSION_ID\",
+  \"name\": \"Enc-Rover-Beta\",
+  \"start_x\": 0, \"start_y\": 0
+}"
+
+# 4a. RL planner for a single rover
+curl -s -X POST $BASE/planning/auto -H "Content-Type: application/json" -d "{
+  \"mission_id\": \"$MISSION_ID\",
+  \"rover_id\": \"$ROVER_ID\",
+  \"planner\": \"rl\"
+}" | python3 -m json.tool
+
+# 4b. Multi-agent: distribute objectives across all rovers automatically
+curl -s -X POST $BASE/planning/multi-agent -H "Content-Type: application/json" -d "{
+  \"mission_id\": \"$MISSION_ID\",
+  \"rover_ids\": [\"$ROVER_ID_1\", \"$ROVER_ID_2\"]
+}" | python3 -m json.tool
+
+# 5. Execute all rover plans (one POST per rover plan_id)
+curl -s -X POST $BASE/simulation/run -H "Content-Type: application/json" -d "{
+  \"mission_id\": \"$MISSION_ID\",
+  \"plan_id\": \"$PLAN_ID\"
+}"
+
+# 6. Claude AI explanation (requires ANTHROPIC_API_KEY in .env)
+#    Streams as Server-Sent Events — pipe through grep for a quick look:
+curl -sN "$BASE/explain/llm/plan/$PLAN_ID" | grep '^data:' | head -5
 ```
 
 ---
@@ -315,8 +356,10 @@ space-missions-control-center/
 │   │   │   └── schemas.py           # Request schemas
 │   │   ├── planning_service/
 │   │   │   ├── router.py
-│   │   │   ├── service.py           # AStarPlanner + PlannerInterface
+│   │   │   ├── service.py           # AStarPlanner + PlannerInterface + planner dispatch
 │   │   │   ├── astar.py             # A* with terrain-weighted costs
+│   │   │   ├── rl_planner.py        # Greedy value-function RL planner (V3)
+│   │   │   ├── multi_agent_planner.py # Objective distribution coordinator (V3)
 │   │   │   └── schemas.py
 │   │   ├── simulation_service/
 │   │   │   ├── router.py
@@ -348,13 +391,17 @@ space-missions-control-center/
 │       ├── styles/
 │       │   └── globals.css          # CSS custom property tokens (dark + light themes)
 │       ├── hooks/
-│       │   ├── useMissions.ts       # React Query hooks
+│       │   ├── useMissions.ts       # React Query hooks (includes useMultiAgentPlan V3)
 │       │   ├── useTelemetry.ts      # WebSocket hook
+│       │   ├── useExplain.ts        # Claude SSE streaming hook (V3)
 │       │   └── useTheme.ts          # Theme toggle + localStorage persistence
 │       ├── components/
-│       │   ├── GridMap.tsx          # SVG 2D terrain grid
+│       │   ├── GridMap.tsx          # SVG 2D terrain grid (elevation tooltip V3)
 │       │   ├── RoverStatus.tsx      # Rover health card
 │       │   ├── AnomalyAlert.tsx     # Anomaly feed
+│       │   ├── BatteryChart.tsx     # Battery % over time (Recharts)
+│       │   ├── TimelinePlayer.tsx   # Step-by-step telemetry replay (V2)
+│       │   ├── TerrainCanvas.tsx    # 3D terrain — React Three Fiber (V3)
 │       │   └── MissionCard.tsx      # Mission list card
 │       └── pages/
 │           ├── Dashboard.tsx        # Fleet overview + stats
@@ -384,8 +431,9 @@ Full OpenAPI spec at http://localhost:8000/openapi.json when the server is runni
 | DELETE | `/api/v1/missions/{id}` | Delete mission and all related data |
 | POST | `/api/v1/missions/{id}/start` | Start mission |
 | GET | `/api/v1/missions/{id}/environment` | Get terrain grid |
-| POST | `/api/v1/planning/auto` | Generate A* plan for a rover |
+| POST | `/api/v1/planning/auto` | Generate A* or RL plan for a rover (`planner` field: `astar`\|`rl`) |
 | POST | `/api/v1/planning/manual` | Create manual plan |
+| POST | `/api/v1/planning/multi-agent` | Coordinate all rovers — distribute objectives and generate one plan per rover |
 | GET | `/api/v1/planning/mission/{id}/all` | List all plans for a mission (one per rover) |
 | POST | `/api/v1/simulation/rovers` | Spawn rover |
 | GET | `/api/v1/simulation/rovers` | List rovers (filter by `?mission_id=`) |
@@ -400,6 +448,7 @@ Full OpenAPI spec at http://localhost:8000/openapi.json when the server is runni
 | GET | `/api/v1/explain/plan/{plan_id}` | Plan explanation |
 | GET | `/api/v1/explain/mission/{mission_id}` | Mission summary |
 | GET | `/api/v1/explain/anomaly/{anomaly_id}` | Anomaly analysis |
+| GET | `/api/v1/explain/llm/{subject}/{id}` | Claude streaming explanation (SSE) — subject: `plan`\|`mission`\|`anomaly` |
 
 ---
 
@@ -417,6 +466,15 @@ All settings are in `backend/core/config.py` and driven by environment variables
 | `DEBUG` | `false` | Enable SQLAlchemy query logging |
 | `ROVER_BATTERY_CAPACITY` | `1000.0` | Max battery units |
 | `ROVER_MOVE_COST` | `10.0` | Battery per cell × terrain multiplier |
+| `ANTHROPIC_API_KEY` | _(unset)_ | Enables Claude streaming explanations in Explain tab |
+| `CLAUDE_MODEL` | `claude-sonnet-4-6` | Claude model used for explanations |
+| `CLAUDE_MAX_TOKENS` | `1024` | Max tokens per Claude response |
+| `RL_EPISODE_BUDGET` | `500` | Max steps the RL planner may explore per plan |
+| `RL_WEIGHT_TARGET` | `2.0` | RL value function: target proximity weight |
+| `RL_WEIGHT_TERRAIN` | `1.0` | RL value function: terrain cost penalty |
+| `RL_WEIGHT_GEYSER` | `3.0` | RL value function: geyser avoidance penalty |
+| `PHYSICS_ELEVATION_COST_FACTOR` | `0.5` | Slope stress multiplier for wheel-stuck probability |
+| `PHYSICS_THERMAL_ANOMALY_SCALE` | `1.0` | Temperature anomaly probability scale factor |
 
 ---
 
@@ -458,17 +516,17 @@ REDIS_URL=redis://localhost:6379/0   # default; override if needed
 
 ## Anomaly System
 
-The `AnomalyEngine` injects probabilistic failures during execution:
+The `AnomalyEngine` injects probabilistic failures during execution. Probabilities are physics-informed in V3 — slope stress and ambient temperature affect failure rates.
 
 | Anomaly | Trigger | Effect |
 |---|---|---|
-| `wheel_stuck` | Rocky/crater terrain | Halts rover (STUCK state) |
-| `comm_loss` | Random (1% per step) | COMM_LOST state |
-| `energy_spike` | Random (3% per step) | −10% battery |
-| `geyser_proximity` | Geyser terrain cell | Halts rover |
-| `low_battery` | Battery < 15% | Alert (no state change) |
+| `wheel_stuck` | Rocky/crater terrain; probability scales with cell elevation (slope stress) | Halts rover (STUCK state); auto-retried after 1 s hold |
+| `comm_loss` | Random (1% per step) | COMM_LOST state — halts plan |
+| `energy_spike` | Random; probability doubles below 60 K (thermal contraction) | −10% battery |
+| `geyser_proximity` | Geyser terrain cell (25% per step) | Halts rover (STUCK state) |
+| `low_battery` | Battery < 15% | Alert only — no state change |
 
-Auto-recovery: stuck rovers are auto-retried once after a 1-second hold.
+Severity levels: `low`, `medium`, `high`, `critical`. All anomalies are persisted and dismissible via the UI or `PATCH /api/v1/telemetry/anomalies/{id}/resolve`.
 
 ---
 
@@ -505,11 +563,12 @@ Auto-recovery: stuck rovers are auto-retried once after a 1-second hold.
 - [x] Timeline playback (step-by-step replay of past telemetry with scrubber, play/pause, and speed control)
 
 ### V3
-- [ ] Reinforcement Learning planner interface
-- [ ] Multi-agent planning (independent rover objectives)
-- [ ] Claude API integration for natural-language explanations
-- [ ] Physics-based terrain simulation
-- [ ] 3D visualization
+- [x] Reinforcement Learning planner — greedy value-function policy; select A* or RL per-rover in the UI; hot-swap ready for trained weights
+- [x] Multi-agent planning — "Coordinate All Rovers" distributes objectives across rovers via greedy distance assignment, generates independent A* plans per rover
+- [x] Claude API integration — streaming SSE explanation in the Explain tab; set `ANTHROPIC_API_KEY` to activate; falls back gracefully if unset
+- [x] Physics-based terrain — elevation map (multi-octave noise), slope-adjusted movement cost, temperature-aware anomaly probability
+- [x] 3D visualization — React Three Fiber terrain canvas, per-cell meshes with elevation extrusion, location-pin rover markers with bob animation and shadow ring, hover tooltips (lazy-loaded in "3D" tab)
+- [x] Anomalies tab — full anomaly history with sort (newest / oldest / severity) and filter (status / type / severity) controls; sidebar shows only active anomalies newest-first with direct dismiss actions; Anomalies tab button shows live badge count
 
 ---
 
@@ -517,16 +576,22 @@ Auto-recovery: stuck rovers are auto-retried once after a 1-second hold.
 
 ### Adding a new planner
 
-Implement `PlannerInterface` in `backend/services/planning_service/service.py`:
+1. Create `backend/services/planning_service/my_planner.py` and implement `PlannerInterface`:
 
 ```python
-class MyRLPlanner(PlannerInterface):
+from .schemas import PlanRequest
+from core.models.plan import Plan
+from core.models.environment import Grid
+
+class MyPlanner:
     async def plan(self, request: PlanRequest, grid: Grid, objectives: list) -> Plan:
-        # Your RL/MAS planning logic here
+        # Your planning logic here
         ...
 ```
 
-Register it under a new `PlannerType` enum value and add a route.
+2. Add a value to `PlannerType` in `core/models/plan.py` (e.g. `MY_PLANNER = "my_planner"`).
+3. Instantiate and dispatch in `PlanningService.__init__` / `create_plan` in `planning_service/service.py`.
+4. The existing A* and RL planners (`astar.py`, `rl_planner.py`) are good reference implementations.
 
 ### Adding a new anomaly type
 
@@ -534,17 +599,38 @@ Register it under a new `PlannerType` enum value and add a route.
 2. Add detection logic in `simulation_service/anomaly_engine.py`
 3. Add impact/recommendation text in `explainability_service/service.py`
 
-### Extending the explainability layer for LLM
+### Claude API integration
 
-The `_build_llm_context()` method in `explainability_service/service.py` already builds a structured string context. To wire Claude:
+Claude is already wired in `explainability_service/service.py`. To activate it:
 
-```python
-import anthropic
-
-client = anthropic.Anthropic()
-response = client.messages.create(
-    model="claude-sonnet-4-6",
-    max_tokens=1024,
-    messages=[{"role": "user", "content": context}],
-)
+```bash
+# backend/.env
+ANTHROPIC_API_KEY=sk-ant-...
+CLAUDE_MODEL=claude-sonnet-4-6   # default
 ```
+
+The `GET /api/v1/explain/llm/{subject}/{id}` endpoint streams a Server-Sent Events response. In the UI, click **Ask Claude** in the Explain tab. If the key is absent, the endpoint returns a plain-text fallback message — no errors or crashes.
+
+To extend the context Claude receives, edit `_build_llm_context()` in `explainability_service/service.py`. The method returns a plain string that is passed directly as the user message.
+
+### Tuning the RL planner
+
+The RL planner uses a greedy value function:
+
+```
+V(cell) = (w_target / (1 + dist_to_nearest_obj))
+        - w_terrain × cell.movement_cost
+        - w_geyser  × geyser_penalty
+        - |elevation| × 0.5
+```
+
+Adjust weights in `.env` without redeploying:
+
+```bash
+RL_WEIGHT_TARGET=2.0    # increase to be more aggressive toward objectives
+RL_WEIGHT_TERRAIN=1.0   # increase to prefer easier terrain
+RL_WEIGHT_GEYSER=3.0    # increase for stronger geyser avoidance
+RL_EPISODE_BUDGET=500   # max steps before fallback to A*
+```
+
+To swap in a trained neural policy, subclass or replace `_value()` in `rl_planner.py` — the rest of the planning loop stays unchanged.

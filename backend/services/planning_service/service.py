@@ -1,3 +1,4 @@
+import structlog
 import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -6,9 +7,13 @@ from core.models.command import Command, CommandType
 from core.models.environment import Grid
 from core.events import EventBus, MissionEvent, EventType
 from core.config import settings
-from core.repositories import MissionRepository, EnvironmentRepository, PlanRepository
+from core.repositories import MissionRepository, EnvironmentRepository, PlanRepository, RoverRepository
 from .astar import astar, path_battery_cost
-from .schemas import PlanRequest, WaypointRequest
+from .schemas import PlanRequest, WaypointRequest, MultiAgentPlanRequest
+from .rl_planner import RLPlanner
+from .multi_agent_planner import MultiAgentCoordinator
+
+log = structlog.get_logger(__name__)
 
 
 class PlannerInterface:
@@ -75,9 +80,12 @@ class PlanningService:
     def __init__(self, event_bus: EventBus) -> None:
         self._bus = event_bus
         self._astar = AStarPlanner(move_cost_per_cell=settings.rover_move_cost)
+        self._rl = RLPlanner()
+        self._multi = MultiAgentCoordinator(self._astar)
         self._missions = MissionRepository()
         self._environments = EnvironmentRepository()
         self._plans = PlanRepository()
+        self._rovers = RoverRepository()
 
     async def create_plan(self, session: AsyncSession, request: PlanRequest) -> Plan | None:
         mission = await self._missions.get(session, request.mission_id)
@@ -87,7 +95,8 @@ class PlanningService:
         if not env:
             return None
 
-        plan = await self._astar.plan(request, env.grid, mission.objectives)
+        planner = self._rl if request.planner == PlannerType.RL else self._astar
+        plan = await planner.plan(request, env.grid, mission.objectives)
         await self._plans.save(session, plan)
 
         mission.plan_id = plan.id
@@ -99,9 +108,53 @@ class PlanningService:
             stream=settings.mission_stream,
             mission_id=request.mission_id,
             rover_id=request.rover_id,
-            payload={"plan_id": plan.id, "steps": str(plan.estimated_steps)},
+            payload={"plan_id": plan.id, "steps": str(plan.estimated_steps), "planner": plan.planner.value},
         ))
         return plan
+
+    async def create_multi_agent_plan(
+        self, session: AsyncSession, request: MultiAgentPlanRequest
+    ) -> list[Plan] | None:
+        mission = await self._missions.get(session, request.mission_id)
+        if not mission:
+            return None
+        env = await self._environments.get(session, mission.environment_id)
+        if not env:
+            return None
+
+        rover_positions: dict[str, tuple[int, int]] = {}
+        for rover_id in request.rover_ids:
+            rover = await self._rovers.get(session, rover_id)
+            if rover:
+                rover_positions[rover_id] = (rover.x, rover.y)
+
+        if not rover_positions:
+            return None
+
+        plans = await self._multi.plan_all(
+            mission_id=request.mission_id,
+            rover_ids=list(rover_positions.keys()),
+            rover_positions=rover_positions,
+            objectives=mission.objectives,
+            grid=env.grid,
+        )
+
+        for plan in plans:
+            await self._plans.save(session, plan)
+            await self._bus.publish(MissionEvent(
+                type=EventType.PLAN_CREATED,
+                stream=settings.mission_stream,
+                mission_id=request.mission_id,
+                rover_id=plan.rover_id,
+                payload={"plan_id": plan.id, "planner": plan.planner.value},
+            ))
+
+        if plans:
+            mission.plan_id = plans[0].id
+            await self._missions.save(session, mission)
+
+        await session.commit()
+        return plans
 
     async def create_manual_plan(self, session: AsyncSession, request: WaypointRequest) -> Plan | None:
         mission = await self._missions.get(session, request.mission_id)

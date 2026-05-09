@@ -11,8 +11,8 @@
 
   --text:          #e2e8f0;
   --text-sec:      #94a3b8;
-  --text-muted:    #475569;
-  --text-faint:    #334155;
+  --text-muted:    #64748b;
+  --text-faint:    #475569;
 
   --accent:        #38bdf8;
   --accent-dim:    rgba(56, 189, 248, 0.12);
@@ -41,8 +41,8 @@
 
   --text:          #0f172a;
   --text-sec:      #334155;
-  --text-muted:    #64748b;
-  --text-faint:    #94a3b8;
+  --text-muted:    #475569;
+  --text-faint:    #64748b;
 
   --accent:        #0284c7;
   --accent-dim:    rgba(2, 132, 199, 0.1);

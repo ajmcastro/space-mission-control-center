@@ -35,7 +35,10 @@ class Cell(BaseModel):
 
     @property
     def movement_cost(self) -> float:
-        return TERRAIN_COST[self.terrain]
+        base = TERRAIN_COST[self.terrain]
+        # Elevation relief adds up to 50% extra cost at maximum grade (|elev| = 1.0).
+        slope_factor = 1.0 + abs(self.elevation) * 0.5
+        return base * slope_factor
 
 
 class Grid(BaseModel):

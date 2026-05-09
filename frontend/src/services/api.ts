@@ -42,10 +42,12 @@ export const missionsApi = {
 // ─── Planning ────────────────────────────────────────────────────────────────
 
 export const planningApi = {
-  autoPlan: (payload: { mission_id: string; rover_id: string; start_x?: number; start_y?: number }) =>
+  autoPlan: (payload: { mission_id: string; rover_id: string; start_x?: number; start_y?: number; planner?: string }) =>
     http.post<Plan>('/planning/auto', payload).then(r => r.data),
   manualPlan: (payload: { mission_id: string; rover_id: string; waypoints: [number, number][] }) =>
     http.post<Plan>('/planning/manual', payload).then(r => r.data),
+  multiAgentPlan: (payload: { mission_id: string; rover_ids: string[] }) =>
+    http.post<Plan[]>('/planning/multi-agent', payload).then(r => r.data),
   getPlan: (id: string) => http.get<Plan>(`/planning/${id}`).then(r => r.data),
   getMissionPlan: (missionId: string) =>
     http.get<Plan>(`/planning/mission/${missionId}`).then(r => r.data),
@@ -90,4 +92,6 @@ export const explainApi = {
   plan: (planId: string) => http.get(`/explain/plan/${planId}`).then(r => r.data),
   mission: (missionId: string) => http.get(`/explain/mission/${missionId}`).then(r => r.data),
   anomaly: (anomalyId: string) => http.get(`/explain/anomaly/${anomalyId}`).then(r => r.data),
+  llmStream: (subject: 'plan' | 'mission' | 'anomaly', id: string): EventSource =>
+    new EventSource(`/api/v1/explain/llm/${subject}/${id}`),
 };

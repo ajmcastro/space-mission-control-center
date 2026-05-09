@@ -32,8 +32,9 @@ space-missions-control-center/
 | New service or major module | `README.md` → Project Structure tree + Service Responsibilities table |
 | New domain model | `README.md` → Domain Models table |
 | New anomaly type | `README.md` → Anomaly System table |
-| Roadmap item completed | `README.md` → Roadmap (move `[ ]` to `[x]`) |
-| New V2/V3 feature planned | `README.md` → Roadmap |
+| New planner type | `README.md` → Development → Adding a new planner |
+| Roadmap item completed | `README.md` → Roadmap (move `[ ]` to `[x]`) + update CLAUDE.md current state |
+| New future work planned | `README.md` → Roadmap + CLAUDE.md → Possible future work |
 | New Make target added | `README.md` → Make Targets section |
 | Dev workflow changes | `README.md` → Quick Start or Development sections |
 
@@ -165,17 +166,24 @@ The bus is `InMemoryEventBus` in V1. Do **not** hard-code Redis anywhere — use
 
 ---
 
-## V2 / V3 Planned Work (context for future agents)
+## Current Architecture State (V3 complete)
 
-### V2 targets
-- Replace in-memory stores with SQLAlchemy + PostgreSQL (migrations via Alembic).
-- Switch `InMemoryEventBus` → `RedisStreamBus` in `main.py`.
-- Timeline playback and telemetry charts in the frontend.
-- Anomaly resolution workflow (UI + API).
-- Multi-rover coordination within a single mission.
+All V1, V2, and V3 features are shipped. The system runs as a single FastAPI process with SQLite (dev) or PostgreSQL (prod).
 
-### V3 targets
-- Reinforcement Learning planner (implement `PlannerInterface`).
-- Multi-agent planning (multiple independent planners per mission).
-- Claude API integration in `explainability_service` for natural-language explanations.
-- 3D visualization.
+### What is in production
+- **Persistence** — SQLAlchemy async ORM + Alembic migrations (`core/db_models/`, `core/repositories/`)
+- **Event bus** — `InMemoryEventBus` by default; `USE_REDIS=true` activates `RedisStreamBus`
+- **Planning** — A* (`astar.py`), greedy RL value-function (`rl_planner.py`), multi-agent objective distribution (`multi_agent_planner.py`)
+- **Physics** — elevation map per environment, slope-adjusted movement cost, temperature-aware anomaly probability
+- **Explainability** — structured logs + Claude API streaming SSE (`ANTHROPIC_API_KEY` optional)
+- **Frontend tabs** — Map (2D SVG) · Telemetry · Charts · Timeline · Explain (Claude) · 3D (React Three Fiber) · Anomalies (full history, sort + filter)
+
+### V1 constraints still in force
+- All 5 services run in **one FastAPI process**. Do not split into microservices without discussion.
+- SQLite is the default `DATABASE_URL`. PostgreSQL is activated by env var.
+- The event bus abstraction must be preserved — never call between services directly.
+
+### Possible future work
+- Trained neural policy for `RLPlanner` (swap `_value()` — no other changes needed).
+- Per-mission environment editing (add/remove terrain features via the UI).
+- Physics-based terrain simulation (momentum, wind, geyser pressure).

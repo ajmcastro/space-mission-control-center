@@ -1,9 +1,11 @@
+import React, { useState, Suspense } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   useMission, useMissionEnvironment, useMissionPlans, useRovers,
   useStartMission, useSpawnRover, useAutoPlan, useRunPlan,
-  useUpdateMission, useDeleteMission, missionPlansKey,
+  useUpdateMission, useDeleteMission, useMultiAgentPlan, missionPlansKey,
 } from '@/hooks/useMissions';
+import { useLLMExplain } from '@/hooks/useExplain';
 import { telemetryApi } from '@/services/api';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTelemetrySocket } from '@/hooks/useTelemetry';
@@ -13,8 +15,11 @@ import { RoverStatus } from '@/components/RoverStatus';
 import { AnomalyAlert } from '@/components/AnomalyAlert';
 import { BatteryChart } from '@/components/BatteryChart';
 import { TimelinePlayer } from '@/components/TimelinePlayer';
-import { useState } from 'react';
 import type { Rover } from '@/types';
+
+const TerrainCanvas = React.lazy(() =>
+  import('@/components/TerrainCanvas').then(m => ({ default: m.TerrainCanvas }))
+);
 
 function ActionBtn({ label, onClick, disabled, color = 'var(--btn-primary)' }: {
   label: string; onClick: () => void; disabled?: boolean; color?: string;
@@ -52,12 +57,13 @@ function RoverPanel({
 }: {
   rover: Rover;
   missionStatus: string;
-  plan?: { id: string; total_commands: number; estimated_total_battery: number } | null;
-  onPlan: (roverId: string) => void;
+  plan?: { id: string; total_commands: number; estimated_total_battery: number; planner?: string; metadata?: Record<string, unknown> } | null;
+  onPlan: (roverId: string, planner: string) => void;
   onRun: (planId: string) => void;
   planPending: boolean;
   runPending: boolean;
 }) {
+  const [selectedPlanner, setSelectedPlanner] = useState<'astar' | 'rl'>('astar');
   const isExecuting = ['moving', 'sampling', 'stuck'].includes(rover.state);
   const canPlan = missionStatus === 'active' && !isExecuting;
   const canRun  = missionStatus === 'active' && !!plan && !isExecuting;
@@ -68,9 +74,22 @@ function RoverPanel({
       borderRadius: 8, padding: '10px 12px', marginBottom: 10,
     }}>
       <RoverStatus rover={rover} />
-      <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <select
+          value={selectedPlanner}
+          onChange={e => setSelectedPlanner(e.target.value as 'astar' | 'rl')}
+          disabled={!canPlan || planPending}
+          style={{
+            background: 'var(--bg)', border: '1px solid var(--border)',
+            borderRadius: 5, color: 'var(--text)', fontSize: 11,
+            padding: '3px 6px', fontFamily: 'inherit', cursor: canPlan ? 'pointer' : 'not-allowed',
+          }}
+        >
+          <option value="astar">A*</option>
+          <option value="rl">RL</option>
+        </select>
         <button
-          onClick={() => onPlan(rover.id)}
+          onClick={() => onPlan(rover.id, selectedPlanner)}
           disabled={!canPlan || planPending}
           style={{
             background: !canPlan || planPending ? 'var(--border)' : '#0369a1',
@@ -80,7 +99,7 @@ function RoverPanel({
             fontFamily: 'inherit', fontWeight: 600,
           }}
         >
-          {planPending ? 'Planning…' : isExecuting ? `Plan (${plan?.total_commands ?? '…'} steps)` : plan ? `Plan (${plan.total_commands} steps)` : 'Auto Plan (A*)'}
+          {planPending ? 'Planning…' : isExecuting ? `Plan (${plan?.total_commands ?? '…'} steps)` : plan ? `Plan (${plan.total_commands} steps)` : 'Plan'}
         </button>
         <button
           onClick={() => plan && onRun(plan.id)}
@@ -97,9 +116,183 @@ function RoverPanel({
         </button>
       </div>
       {plan && (
-        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 5 }}>
-          Est. battery cost: {plan.estimated_total_battery.toFixed(1)} ·{' '}
-          {plan.total_commands} commands
+        <div style={{ fontSize: 11, color: 'var(--text-sec)', marginTop: 5 }}>
+          {plan.planner && (
+            <span style={{
+              background: plan.planner === 'rl' ? '#7c3aed22' : '#0369a122',
+              color: plan.planner === 'rl' ? '#a78bfa' : '#38bdf8',
+              border: `1px solid ${plan.planner === 'rl' ? '#7c3aed55' : '#0369a155'}`,
+              borderRadius: 3, padding: '0 5px', marginRight: 6, fontSize: 10, fontWeight: 700,
+            }}>
+              {plan.planner.toUpperCase()}
+            </span>
+          )}
+          Est. battery cost: <span style={{ color: 'var(--accent-amber)', fontWeight: 600 }}>{plan.estimated_total_battery.toFixed(1)}</span>
+          {' · '}
+          <span style={{ color: 'var(--text)', fontWeight: 600 }}>{plan.total_commands}</span> commands
+        </div>
+      )}
+    </div>
+  );
+}
+
+const SEVERITY_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+const SEVERITY_COLORS: Record<string, string> = {
+  low: '#4ade80', medium: '#fb923c', high: '#f87171', critical: '#dc2626',
+};
+const ANOMALY_ICONS: Record<string, string> = {
+  wheel_stuck: '⚙', comm_loss: '📡', energy_spike: '⚡',
+  sensor_fault: '🔬', geyser_proximity: '🌋', low_battery: '🔋',
+  path_blocked: '🚧', unknown: '❓',
+};
+const RESOLUTION_LABELS: Record<string, string> = {
+  pending: 'Pending', auto_recovered: 'Auto-recovered',
+  replanned: 'Replanned', aborted: 'Aborted', ignored: 'Dismissed',
+};
+
+function AnomaliesTab({ anomalies, onResolve, onDismissAll, dismissAllPending }: {
+  anomalies: import('@/types').Anomaly[];
+  onResolve: (id: string) => void;
+  onDismissAll: () => void;
+  dismissAllPending: boolean;
+}) {
+  const [sortBy, setSortBy]       = useState<'time_desc' | 'time_asc' | 'severity'>('time_desc');
+  const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'resolved'>('all');
+  const [filterType, setFilterType]     = useState<string>('all');
+  const [filterSeverity, setFilterSeverity] = useState<string>('all');
+
+  const allTypes = Array.from(new Set(anomalies.map(a => a.type)));
+
+  const filtered = anomalies
+    .filter(a => filterStatus === 'all' ? true : filterStatus === 'pending' ? a.resolution === 'pending' : a.resolution !== 'pending')
+    .filter(a => filterType === 'all' || a.type === filterType)
+    .filter(a => filterSeverity === 'all' || a.severity === filterSeverity)
+    .sort((a, b) => {
+      if (sortBy === 'severity') return (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9);
+      const ta = new Date(a.detected_at).getTime();
+      const tb = new Date(b.detected_at).getTime();
+      return sortBy === 'time_desc' ? tb - ta : ta - tb;
+    });
+
+  const pendingCount = anomalies.filter(a => a.resolution === 'pending').length;
+
+  const selectStyle: React.CSSProperties = {
+    background: 'var(--surface)', border: '1px solid var(--border)',
+    borderRadius: 5, color: 'var(--text)', fontSize: 11,
+    padding: '4px 8px', fontFamily: 'inherit', cursor: 'pointer',
+  };
+
+  return (
+    <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 10, padding: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+        <h3 style={{ fontSize: 13, color: 'var(--text-sec)', margin: 0 }}>Anomaly History</h3>
+        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+          {filtered.length} shown · {pendingCount} active
+        </span>
+        {pendingCount > 1 && (
+          <button
+            onClick={onDismissAll}
+            disabled={dismissAllPending}
+            style={{ ...selectStyle, marginLeft: 'auto', color: 'var(--accent-red)', borderColor: 'var(--accent-red)' }}
+          >
+            {dismissAllPending ? 'Dismissing…' : 'Dismiss all active'}
+          </button>
+        )}
+      </div>
+
+      {/* Controls */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Sort:</span>
+        <select value={sortBy} onChange={e => setSortBy(e.target.value as typeof sortBy)} style={selectStyle}>
+          <option value="time_desc">Newest first</option>
+          <option value="time_asc">Oldest first</option>
+          <option value="severity">Severity</option>
+        </select>
+        <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 8 }}>Filter:</span>
+        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value as typeof filterStatus)} style={selectStyle}>
+          <option value="all">All statuses</option>
+          <option value="pending">Active only</option>
+          <option value="resolved">Resolved only</option>
+        </select>
+        <select value={filterSeverity} onChange={e => setFilterSeverity(e.target.value)} style={selectStyle}>
+          <option value="all">All severities</option>
+          <option value="critical">Critical</option>
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+          <option value="low">Low</option>
+        </select>
+        <select value={filterType} onChange={e => setFilterType(e.target.value)} style={selectStyle}>
+          <option value="all">All types</option>
+          {allTypes.map(t => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
+        </select>
+        {(filterStatus !== 'all' || filterType !== 'all' || filterSeverity !== 'all') && (
+          <button
+            onClick={() => { setFilterStatus('all'); setFilterType('all'); setFilterSeverity('all'); }}
+            style={{ ...selectStyle, color: 'var(--accent)', borderColor: 'var(--accent)' }}
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
+
+      {filtered.length === 0 ? (
+        <div style={{ color: 'var(--text-muted)', fontSize: 12, textAlign: 'center', padding: '24px 0' }}>
+          No anomalies match the current filters.
+        </div>
+      ) : (
+        <div>
+          {filtered.map(a => {
+            const c = SEVERITY_COLORS[a.severity] ?? '#6b7280';
+            const resolved = a.resolution !== 'pending';
+            return (
+              <div key={a.id} style={{
+                background: 'var(--surface)',
+                border: `1px solid ${resolved ? 'var(--border)' : c + '40'}`,
+                borderLeft: `3px solid ${resolved ? 'var(--border-strong)' : c}`,
+                borderRadius: 6, padding: '8px 12px', marginBottom: 6,
+                opacity: resolved ? 0.65 : 1,
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>
+                    {ANOMALY_ICONS[a.type] ?? '!'} {a.type.replace(/_/g, ' ')}
+                  </span>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <span style={{
+                      fontSize: 10, fontWeight: 700, textTransform: 'uppercase',
+                      color: resolved ? 'var(--text-muted)' : c,
+                    }}>
+                      {a.severity}
+                    </span>
+                    <span style={{
+                      fontSize: 10, color: resolved ? 'var(--text-muted)' : '#f59e0b',
+                      background: resolved ? 'var(--surface-alt)' : '#f59e0b18',
+                      border: `1px solid ${resolved ? 'var(--border)' : '#f59e0b44'}`,
+                      borderRadius: 4, padding: '1px 6px', fontWeight: 600,
+                    }}>
+                      {RESOLUTION_LABELS[a.resolution] ?? a.resolution}
+                    </span>
+                    {!resolved && (
+                      <button
+                        onClick={() => onResolve(a.id)}
+                        style={{
+                          background: 'none', border: '1px solid var(--border)',
+                          borderRadius: 4, color: 'var(--text-muted)', cursor: 'pointer',
+                          fontSize: 10, padding: '1px 6px', fontFamily: 'inherit',
+                        }}
+                      >
+                        {a.type === 'comm_loss' ? 'Restore comms' : a.type === 'low_battery' ? 'Recharge' : 'Dismiss'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-sec)', marginTop: 4 }}>{a.description}</div>
+                <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 3 }}>
+                  ({a.x}, {a.y}) · {new Date(a.detected_at).toLocaleTimeString()}
+                  {a.resolved_at && ` · resolved ${new Date(a.resolved_at).toLocaleTimeString()}`}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -129,18 +322,19 @@ export function MissionView() {
 
   const telemetryBuffer = useMissionStore(s => s.telemetryBuffer);
 
-  const startMission  = useStartMission();
-  const spawnRover    = useSpawnRover();
-  const autoPlan      = useAutoPlan();
-  const runPlan       = useRunPlan();
-  const updateMission = useUpdateMission();
-  const deleteMission = useDeleteMission();
+  const startMission   = useStartMission();
+  const spawnRover     = useSpawnRover();
+  const autoPlan       = useAutoPlan();
+  const runPlan        = useRunPlan();
+  const multiAgentPlan = useMultiAgentPlan();
+  const updateMission  = useUpdateMission();
+  const deleteMission  = useDeleteMission();
 
   const [resolveError, setResolveError]     = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete]   = useState(false);
-  const [showAllAnomalies, setShowAllAnomalies] = useState(false);
+
   const [roverName, setRoverName]           = useState('');
-  const [activeTab, setActiveTab]           = useState<'map' | 'telemetry' | 'charts' | 'timeline' | 'explain'>('map');
+  const [activeTab, setActiveTab]           = useState<'map' | 'telemetry' | 'charts' | 'timeline' | 'explain' | '3d' | 'anomalies'>('map');
   const [showAllSteps, setShowAllSteps]     = useState(false);
   const [editing, setEditing]               = useState(false);
   const [editName, setEditName]             = useState('');
@@ -180,6 +374,11 @@ export function MissionView() {
 
   useTelemetrySocket(missionId);
 
+  // These must be computed before early returns so useLLMExplain is always called
+  const explainRover = rovers.find(r => r.id === explainRoverId) ?? rovers[0];
+  const explainPlan  = explainRover ? plansByRover[explainRover.id] : null;
+  const llm = useLLMExplain('plan', explainPlan?.id ?? null);
+
   if (isLoading) return <div style={{ padding: 32, color: 'var(--text-muted)' }}>Loading mission...</div>;
   if (!mission)  return <div style={{ padding: 32, color: 'var(--accent-red)' }}>Mission not found</div>;
 
@@ -195,8 +394,6 @@ export function MissionView() {
     .flatMap(p => p.waypoints as [number, number][]);
   const targetCells: [number, number][] = mission.objectives.map(o => [o.target_x, o.target_y]);
 
-  const explainRover = rovers.find(r => r.id === explainRoverId) ?? rovers[0];
-  const explainPlan  = explainRover ? plansByRover[explainRover.id] : null;
   const displayedSteps = showAllSteps
     ? (explainPlan?.steps ?? [])
     : (explainPlan?.steps ?? []).slice(0, 30);
@@ -207,15 +404,23 @@ export function MissionView() {
     setEditing(true);
   }
 
-  function handleAutoPlan(roverId: string) {
+  function handleAutoPlan(roverId: string, planner: string = 'astar') {
     const rover = rovers.find(r => r.id === roverId);
     autoPlan.mutate({
       mission_id: missionId,
       rover_id: roverId,
       start_x: rover?.x ?? 0,
       start_y: rover?.y ?? 0,
+      planner,
     }, {
       onSuccess: () => qc.invalidateQueries({ queryKey: missionPlansKey(missionId) }),
+    });
+  }
+
+  function handleMultiAgentPlan() {
+    multiAgentPlan.mutate({
+      mission_id: missionId,
+      rover_ids: rovers.map(r => r.id),
     });
   }
 
@@ -356,6 +561,14 @@ export function MissionView() {
             disabled={!canSpawnRover}
             color="#7c3aed"
           />
+          {rovers.length >= 2 && (
+            <ActionBtn
+              label={multiAgentPlan.isPending ? 'Coordinating…' : 'Coordinate All Rovers'}
+              onClick={handleMultiAgentPlan}
+              disabled={mission.status !== 'active' || multiAgentPlan.isPending}
+              color="#0f766e"
+            />
+          )}
         </div>
 
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -412,7 +625,10 @@ export function MissionView() {
         {/* Left: tabs */}
         <div>
           <div style={{ display: 'flex', gap: 2, marginBottom: 14 }}>
-            {(['map', 'telemetry', 'charts', 'timeline', 'explain'] as const).map(tab => (
+            {(['map', 'telemetry', 'charts', 'timeline', 'explain', '3d', 'anomalies'] as const).map(tab => {
+              const pendingCount = tab === 'anomalies' ? anomalies.filter(a => a.resolution === 'pending').length : 0;
+              const label = tab === '3d' ? '3D' : tab.charAt(0).toUpperCase() + tab.slice(1);
+              return (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -423,11 +639,21 @@ export function MissionView() {
                   borderRadius: 6, padding: '6px 14px', fontSize: 12,
                   cursor: 'pointer', fontFamily: 'inherit',
                   fontWeight: activeTab === tab ? 700 : 400,
+                  position: 'relative',
                 }}
               >
-                {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                {label}
+                {pendingCount > 0 && (
+                  <span style={{
+                    position: 'absolute', top: -5, right: -5,
+                    background: '#dc2626', color: '#fff',
+                    borderRadius: 10, fontSize: 9, fontWeight: 800,
+                    padding: '1px 5px', lineHeight: 1.4,
+                  }}>{pendingCount}</span>
+                )}
               </button>
-            ))}
+              );
+            })}
           </div>
 
           {activeTab === 'map' && (
@@ -490,6 +716,27 @@ export function MissionView() {
                 Battery Over Time
               </h3>
               <BatteryChart rovers={rovers} telemetryEvents={telemetryEvents} telemetryBuffer={telemetryBuffer} />
+            </div>
+          )}
+
+          {activeTab === '3d' && (
+            <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden', height: 1040 }}>
+              {env ? (
+                <Suspense fallback={
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: 12 }}>
+                    Loading 3D renderer…
+                  </div>
+                }>
+                  <TerrainCanvas
+                    environment={env}
+                    rovers={rovers}
+                    highlightPath={allWaypoints}
+                    targetCells={targetCells}
+                  />
+                </Suspense>
+              ) : (
+                <p style={{ padding: 16, color: 'var(--text-muted)', fontSize: 12 }}>Loading terrain…</p>
+              )}
             </div>
           )}
 
@@ -567,9 +814,49 @@ export function MissionView() {
                         : `Show all ${explainPlan.steps.length} steps (${explainPlan.steps.length - 30} more)`}
                     </button>
                   )}
+
+                  {/* Claude AI explanation */}
+                  <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                      <span style={{ fontSize: 12, color: 'var(--text-sec)', fontWeight: 600 }}>Claude Analysis</span>
+                      <button
+                        onClick={llm.loading ? llm.reset : llm.trigger}
+                        style={{
+                          background: llm.loading ? '#b45309' : 'var(--btn-primary)',
+                          color: '#fff', border: 'none', borderRadius: 5,
+                          padding: '3px 10px', fontSize: 11, cursor: 'pointer',
+                          fontFamily: 'inherit', fontWeight: 600,
+                        }}
+                      >
+                        {llm.loading ? 'Stop' : llm.text ? 'Regenerate' : 'Ask Claude'}
+                      </button>
+                    </div>
+                    {llm.error && (
+                      <p style={{ fontSize: 11, color: 'var(--accent-red)', margin: 0 }}>{llm.error}</p>
+                    )}
+                    {llm.text && (
+                      <p style={{
+                        fontSize: 12, color: 'var(--text)', lineHeight: 1.6,
+                        margin: 0, fontStyle: 'italic',
+                        borderLeft: '2px solid var(--accent)', paddingLeft: 10,
+                      }}>
+                        {llm.text}
+                        {llm.loading && <span style={{ color: 'var(--accent)', animation: 'none' }}>▌</span>}
+                      </p>
+                    )}
+                  </div>
                 </>
               )}
             </div>
+          )}
+
+          {activeTab === 'anomalies' && (
+            <AnomaliesTab
+              anomalies={anomalies}
+              onResolve={id => resolveAnomaly.mutate(id)}
+              onDismissAll={() => dismissAll.mutate()}
+              dismissAllPending={dismissAll.isPending}
+            />
           )}
         </div>
 
@@ -618,24 +905,25 @@ export function MissionView() {
             </div>
           ))}
 
-          {/* Anomalies */}
+          {/* Anomalies sidebar — active only, newest first */}
           {(() => {
-            const activeCount = anomalies.filter(a => a.resolution === 'pending').length;
-            const visibleCount = showAllAnomalies ? anomalies.length : 10;
+            const pending = [...anomalies]
+              .filter(a => a.resolution === 'pending')
+              .sort((a, b) => new Date(b.detected_at).getTime() - new Date(a.detected_at).getTime());
             return (
               <>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '18px 0 10px 0' }}>
-                  <h3 style={{ fontSize: 13, color: 'var(--text-sec)', margin: 0 }}>Anomalies</h3>
-                  {activeCount > 0 && (
+                  <h3 style={{ fontSize: 13, color: 'var(--text-sec)', margin: 0 }}>Active Anomalies</h3>
+                  {pending.length > 0 && (
                     <span style={{
                       background: '#dc262622', color: '#dc2626',
                       border: '1px solid #dc262655', borderRadius: 10,
                       fontSize: 10, padding: '1px 7px', fontWeight: 700,
                     }}>
-                      {activeCount} active
+                      {pending.length}
                     </span>
                   )}
-                  {activeCount > 1 && (
+                  {pending.length > 1 && (
                     <button
                       onClick={() => dismissAll.mutate()}
                       disabled={dismissAll.isPending}
@@ -661,25 +949,21 @@ export function MissionView() {
                 )}
 
                 <AnomalyAlert
-                  anomalies={anomalies}
-                  maxVisible={visibleCount}
-                  onResolve={(id) => resolveAnomaly.mutate(id)}
+                  anomalies={pending}
+                  onResolve={id => resolveAnomaly.mutate(id)}
                 />
 
-                {anomalies.length > 10 && (
-                  <button
-                    onClick={() => setShowAllAnomalies(s => !s)}
-                    style={{
-                      marginTop: 6, background: 'none', border: 'none',
-                      color: 'var(--accent)', cursor: 'pointer',
-                      fontSize: 11, padding: '2px 0', fontFamily: 'inherit',
-                    }}
-                  >
-                    {showAllAnomalies
-                      ? 'Show fewer'
-                      : `Show all ${anomalies.length} anomalies`}
-                  </button>
-                )}
+                <button
+                  onClick={() => setActiveTab('anomalies')}
+                  style={{
+                    marginTop: 8, width: '100%', background: 'none',
+                    border: '1px solid var(--border)', borderRadius: 6,
+                    color: 'var(--accent)', cursor: 'pointer',
+                    fontSize: 11, padding: '5px 0', fontFamily: 'inherit',
+                  }}
+                >
+                  View all anomaly history →
+                </button>
               </>
             );
           })()}

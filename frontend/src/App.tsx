@@ -101,7 +101,7 @@ function navStyle(isActive: boolean): React.CSSProperties {
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
+      <BrowserRouter future={{ v7_startTransition: true }}>
         <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--bg)' }}>
           <Sidebar />
           <main style={{ marginLeft: 200, flex: 1, overflowX: 'hidden' }}>

@@ -15,3 +15,8 @@ class WaypointRequest(BaseModel):
     rover_id: str
     waypoints: list[tuple[int, int]]
     planner: PlannerType = PlannerType.MANUAL
+
+
+class MultiAgentPlanRequest(BaseModel):
+    mission_id: str
+    rover_ids: list[str]

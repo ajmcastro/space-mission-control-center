@@ -126,12 +126,26 @@ export function useSpawnRover() {
 export function useAutoPlan() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: { mission_id: string; rover_id: string; start_x?: number; start_y?: number }) =>
+    mutationFn: (payload: { mission_id: string; rover_id: string; start_x?: number; start_y?: number; planner?: string }) =>
       planningApi.autoPlan(payload),
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: missionKey(data.mission_id) });
       qc.invalidateQueries({ queryKey: planKey(data.id) });
       qc.invalidateQueries({ queryKey: missionPlansKey(data.mission_id) });
+    },
+  });
+}
+
+export function useMultiAgentPlan() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: { mission_id: string; rover_ids: string[] }) =>
+      planningApi.multiAgentPlan(payload),
+    onSuccess: (plans) => {
+      if (plans.length > 0) {
+        qc.invalidateQueries({ queryKey: missionPlansKey(plans[0].mission_id) });
+        qc.invalidateQueries({ queryKey: missionKey(plans[0].mission_id) });
+      }
     },
   });
 }

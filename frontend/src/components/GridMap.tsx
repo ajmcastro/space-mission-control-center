@@ -39,6 +39,7 @@ interface TooltipInfo {
   gridX: number;
   gridY: number;
   terrain: TerrainType;
+  elevation: number;
   hasSample: boolean;
   isPath: boolean;
   isTarget: boolean;
@@ -82,13 +83,14 @@ export function GridMap({
     e: React.MouseEvent,
     x: number, y: number,
     terrain: TerrainType,
+    elevation: number,
     hasSample: boolean,
     isPath: boolean,
     isTarget: boolean,
     isHistory: boolean,
     rover?: Rover,
   ) => {
-    setTooltip({ clientX: e.clientX, clientY: e.clientY, gridX: x, gridY: y, terrain, hasSample, isPath, isTarget, isHistory, rover });
+    setTooltip({ clientX: e.clientX, clientY: e.clientY, gridX: x, gridY: y, terrain, elevation, hasSample, isPath, isTarget, isHistory, rover });
   }, []);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
@@ -117,7 +119,7 @@ export function GridMap({
               <g
                 key={key}
                 style={{ cursor: 'crosshair' }}
-                onMouseEnter={e => handleMouseEnter(e, x, y, cell.terrain, cell.has_sample, isPath, isTgt, isHist, rover)}
+                onMouseEnter={e => handleMouseEnter(e, x, y, cell.terrain, cell.elevation ?? 0, cell.has_sample, isPath, isTgt, isHist, rover)}
               >
                 <rect x={px} y={py} width={cellSize} height={cellSize}
                   fill={TERRAIN_COLORS[cell.terrain]} stroke="#0d1b2a" strokeWidth={0.5} />
@@ -215,6 +217,12 @@ export function GridMap({
           <div style={{ color: '#94a3b8', fontSize: 11, marginBottom: 2 }}>
             Terrain: <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{tooltip.terrain}</span>
           </div>
+          {tooltip.elevation !== 0 && (
+            <div style={{ color: '#94a3b8', fontSize: 11, marginBottom: 2 }}>
+              Elevation: <span style={{ color: '#e2e8f0' }}>{tooltip.elevation.toFixed(2)}</span>
+              <span style={{ color: '#64748b' }}> ({tooltip.elevation > 0 ? 'ridge' : 'depression'})</span>
+            </div>
+          )}
           <div style={{ color: '#64748b', fontSize: 10, marginBottom: 4 }}>
             {TERRAIN_DESCRIPTIONS[tooltip.terrain]}
           </div>

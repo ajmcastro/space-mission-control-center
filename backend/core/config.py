@@ -47,5 +47,20 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
 
+    # Claude API (V3)
+    anthropic_api_key: str = ""
+    claude_model: str = "claude-sonnet-4-6"
+    claude_max_tokens: int = 1024
+
+    # RL Planner (V3)
+    rl_episode_budget: int = 500
+    rl_weight_target: float = 2.0
+    rl_weight_terrain: float = 1.0
+    rl_weight_geyser: float = 3.0
+
+    # Physics (V3)
+    physics_elevation_cost_factor: float = 0.5
+    physics_thermal_anomaly_scale: float = 1.0
+
 
 settings = Settings()

@@ -1,18 +1,13 @@
-"""Anomaly injection engine — hooks for noise, terrain effects, random failures."""
+"""Anomaly injection engine — physics-informed failure model (V3)."""
 import random
 from core.models.rover import Rover, RoverState
 from core.models.anomaly import Anomaly, AnomalyType, AnomalySeverity
 from core.models.command import Command
 from core.models.environment import Environment, TerrainType
+from core.config import settings
 
 
 class AnomalyEngine:
-    """
-    Probabilistic anomaly injector. All probabilities are config-driven so
-    tests can override them. A future V3 extension can replace this with
-    physics-based failure modeling.
-    """
-
     def __init__(
         self,
         wheel_stuck_prob: float = 0.02,
@@ -26,10 +21,6 @@ class AnomalyEngine:
         self._geyser_hazard_prob = geyser_hazard_prob
 
     def check(self, rover: Rover, command: Command, env: Environment) -> Anomaly | None:
-        """
-        Evaluate whether an anomaly occurs while executing `command`.
-        Returns an Anomaly if one fires, otherwise None.
-        """
         cell = env.grid.get_cell(rover.x, rover.y)
 
         # Geyser proximity check
@@ -40,19 +31,30 @@ class AnomalyEngine:
                     "Active geyser eruption nearby — halting for safety",
                 )
 
-        # Wheel stuck on rocky/crater terrain
+        # Wheel stuck — elevated on steep terrain (physics: higher |elevation| = more slope stress)
+        slope_stress = abs(cell.elevation) if cell else 0.0
+        adjusted_wheel_stuck = self._wheel_stuck_prob * (
+            1.0 + slope_stress * 2.0 * settings.physics_elevation_cost_factor
+        )
         if cell and cell.terrain in (TerrainType.ROCKY, TerrainType.CRATER):
-            if random.random() < self._wheel_stuck_prob:
+            if random.random() < adjusted_wheel_stuck:
                 return self._make(
                     rover, AnomalyType.WHEEL_STUCK, AnomalySeverity.MEDIUM,
-                    "Wheel traction loss on rocky surface",
+                    f"Wheel traction loss on {cell.terrain.value} surface "
+                    f"(slope stress {slope_stress:.2f})",
                 )
 
-        # Random energy spike
-        if random.random() < self._energy_spike_prob:
+        # Thermal stress: extreme cold contracts battery cells and causes power spikes.
+        # Enceladus surface is ~75 K; any deviation downward is hazardous.
+        thermal_scale = settings.physics_thermal_anomaly_scale
+        thermal_spike_prob = self._energy_spike_prob
+        if env.temperature_k < 60.0:
+            thermal_spike_prob *= 2.0 * thermal_scale
+        if random.random() < thermal_spike_prob:
             return self._make(
                 rover, AnomalyType.ENERGY_SPIKE, AnomalySeverity.LOW,
-                "Unexpected battery drain spike detected",
+                f"Unexpected battery drain spike "
+                f"(T={env.temperature_k:.0f} K, elev={slope_stress:.2f})",
             )
 
         # Comm loss
@@ -62,7 +64,7 @@ class AnomalyEngine:
                 "Communication link interrupted",
             )
 
-        # Low battery warning (not a hard failure — just an alert)
+        # Low battery warning
         if rover.battery_pct < 15.0:
             return self._make(
                 rover, AnomalyType.LOW_BATTERY, AnomalySeverity.CRITICAL,
@@ -72,7 +74,6 @@ class AnomalyEngine:
         return None
 
     def apply(self, rover: Rover, anomaly: Anomaly) -> None:
-        """Mutate rover state in response to anomaly."""
         if anomaly.type == AnomalyType.WHEEL_STUCK:
             rover.state = RoverState.STUCK
         elif anomaly.type == AnomalyType.COMM_LOSS:
@@ -81,7 +82,6 @@ class AnomalyEngine:
             rover.battery = max(0.0, rover.battery - rover.spec.max_battery * 0.1)
         elif anomaly.type == AnomalyType.GEYSER_PROXIMITY:
             rover.state = RoverState.STUCK
-        # LOW_BATTERY and others are alerts, not state changes
 
     def _make(
         self,

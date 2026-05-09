@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.models.plan import Plan
 from api.deps import get_planning_service, get_session
 from .service import PlanningService
-from .schemas import PlanRequest, WaypointRequest
+from .schemas import PlanRequest, WaypointRequest, MultiAgentPlanRequest
 
 router = APIRouter(prefix="/planning", tags=["planning"])
 
@@ -55,6 +55,18 @@ async def get_mission_plan(
     if not plan:
         raise HTTPException(404, f"No plan for mission {mission_id}")
     return plan
+
+
+@router.post("/multi-agent", response_model=list[Plan], status_code=201)
+async def multi_agent_plan(
+    request: MultiAgentPlanRequest,
+    svc: PlanningService = Depends(get_planning_service),
+    session: AsyncSession = Depends(get_session),
+) -> list[Plan]:
+    plans = await svc.create_multi_agent_plan(session, request)
+    if not plans:
+        raise HTTPException(404, "Mission, environment, or rovers not found")
+    return plans
 
 
 @router.get("/mission/{mission_id}/all", response_model=list[Plan])

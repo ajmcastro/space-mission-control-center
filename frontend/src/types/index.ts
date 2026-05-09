@@ -137,6 +137,7 @@ export interface Plan {
   estimated_steps: number;
   total_commands: number;
   created_at: string;
+  metadata: Record<string, unknown>;
 }
 
 export interface TelemetryEvent {

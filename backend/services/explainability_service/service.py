@@ -2,16 +2,29 @@
 Explainability service — structured decision logs and LLM-ready summaries.
 
 V1: rule-based structured explanations from plan steps and telemetry.
-V3: swap explain() to call Claude API with the structured context.
+V3: Claude API streaming explanations via explain_with_claude().
 """
+import json
+from typing import AsyncIterator, Literal
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.config import settings
 from core.repositories import (
     MissionRepository,
     PlanRepository,
     TelemetryRepository,
     AnomalyRepository,
     EnvironmentRepository,
+)
+
+log = structlog.get_logger(__name__)
+
+_SYSTEM_PROMPT = (
+    "You are an expert mission controller for the Enceladus rover program on Saturn's moon. "
+    "Explain the following mission data in clear, concise language for ground operators. "
+    "Be specific about risks, battery budget implications, terrain challenges, and recommended "
+    "next actions. Two to four sentences maximum. Use precise technical language."
 )
 
 
@@ -104,6 +117,51 @@ class ExplainabilityService:
                 }
         return {"error": "Anomaly not found"}
 
+    async def explain_with_claude(
+        self,
+        session: AsyncSession,
+        subject: Literal["plan", "mission", "anomaly"],
+        subject_id: str,
+    ) -> AsyncIterator[str]:
+        """Stream a natural-language explanation from Claude. Yields text chunks."""
+        if not settings.anthropic_api_key:
+            yield "Claude API key not configured. Set ANTHROPIC_API_KEY in your .env file."
+            return
+
+        # Build structured context for Claude.
+        if subject == "plan":
+            data = await self.explain_plan(session, subject_id)
+            context = data.get("llm_context", json.dumps(data, default=str))
+        elif subject == "mission":
+            data = await self.explain_mission(session, subject_id)
+            context = json.dumps({k: v for k, v in data.items() if k != "decision_log"}, default=str)
+        else:
+            data = await self.explain_anomaly(session, subject_id)
+            context = json.dumps(data, default=str)
+
+        if "error" in data:
+            yield data["error"]
+            return
+
+        log.info("claude_explain_start", subject=subject, subject_id=subject_id)
+
+        try:
+            import anthropic
+            client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+            async with client.messages.stream(
+                model=settings.claude_model,
+                max_tokens=settings.claude_max_tokens,
+                system=_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": context}],
+            ) as stream:
+                async for chunk in stream.text_stream:
+                    yield chunk
+        except Exception as exc:
+            log.error("claude_explain_error", subject=subject, subject_id=subject_id, exc_info=exc)
+            yield f"Claude API error: {exc}"
+
+    # ── Internal helpers ────────────────────────────────────────────────────
+
     def _build_llm_context(self, plan, mission, env) -> str:
         lines = [
             f"Mission: {mission.name if mission else 'unknown'}",
@@ -113,23 +171,28 @@ class ExplainabilityService:
         ]
         if mission:
             lines.append(f"Objectives: {len(mission.objectives)}")
+            completed = sum(1 for o in mission.objectives if o.completed)
+            lines.append(f"Completed objectives: {completed}/{len(mission.objectives)}")
         if env:
             lines.append(f"Grid: {env.grid.width}x{env.grid.height}")
             lines.append(f"Active geysers: {len(env.active_geysers)}")
+            lines.append(f"Temperature: {env.temperature_k:.0f} K")
+        if hasattr(plan, "metadata") and plan.metadata:
+            lines.append(f"Planner metadata: {json.dumps(plan.metadata)}")
         return "\n".join(lines)
 
     async def _build_decision_log(self, session: AsyncSession, mission_id: str) -> list[dict]:
         events = await self._telemetry.get_for_mission(session, mission_id, limit=500)
-        log = []
+        decision_log = []
         for e in events:
             if e.payload.get("command_type") in ("move", "collect_sample"):
-                log.append({
+                decision_log.append({
                     "timestamp": e.timestamp.isoformat(),
                     "action": e.payload.get("command_type"),
                     "position": {"x": e.x, "y": e.y},
                     "battery_pct": e.battery_pct,
                 })
-        return log[-50:]
+        return decision_log[-50:]
 
     def _count_by(self, items: list, field: str) -> dict:
         counts: dict = {}
