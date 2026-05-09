@@ -12,6 +12,7 @@ import { GridMap } from '@/components/GridMap';
 import { RoverStatus } from '@/components/RoverStatus';
 import { AnomalyAlert } from '@/components/AnomalyAlert';
 import { BatteryChart } from '@/components/BatteryChart';
+import { TimelinePlayer } from '@/components/TimelinePlayer';
 import { useState } from 'react';
 import type { Rover } from '@/types';
 
@@ -139,7 +140,7 @@ export function MissionView() {
   const [confirmDelete, setConfirmDelete]   = useState(false);
   const [showAllAnomalies, setShowAllAnomalies] = useState(false);
   const [roverName, setRoverName]           = useState('');
-  const [activeTab, setActiveTab]           = useState<'map' | 'telemetry' | 'charts' | 'explain'>('map');
+  const [activeTab, setActiveTab]           = useState<'map' | 'telemetry' | 'charts' | 'timeline' | 'explain'>('map');
   const [showAllSteps, setShowAllSteps]     = useState(false);
   const [editing, setEditing]               = useState(false);
   const [editName, setEditName]             = useState('');
@@ -411,7 +412,7 @@ export function MissionView() {
         {/* Left: tabs */}
         <div>
           <div style={{ display: 'flex', gap: 2, marginBottom: 14 }}>
-            {(['map', 'telemetry', 'charts', 'explain'] as const).map(tab => (
+            {(['map', 'telemetry', 'charts', 'timeline', 'explain'] as const).map(tab => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -489,6 +490,20 @@ export function MissionView() {
                 Battery Over Time
               </h3>
               <BatteryChart rovers={rovers} telemetryEvents={telemetryEvents} telemetryBuffer={telemetryBuffer} />
+            </div>
+          )}
+
+          {activeTab === 'timeline' && (
+            <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 10, padding: 16 }}>
+              <h3 style={{ fontSize: 13, color: 'var(--text-sec)', marginTop: 0, marginBottom: 16 }}>
+                Timeline Playback
+              </h3>
+              <TimelinePlayer
+                missionId={missionId}
+                rovers={rovers}
+                environment={env ?? null}
+                targetCells={targetCells}
+              />
             </div>
           )}
 

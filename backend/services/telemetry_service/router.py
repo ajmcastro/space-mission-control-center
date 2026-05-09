@@ -75,7 +75,7 @@ async def telemetry_ws(ws: WebSocket, mission_id: str) -> None:
 @router.get("/events/{mission_id}", response_model=list[TelemetryEvent])
 async def get_telemetry(
     mission_id: str,
-    limit: int = Query(default=100, le=1000),
+    limit: int = Query(default=100, le=10000),
     session: AsyncSession = Depends(get_session),
 ) -> list[TelemetryEvent]:
     return await _telemetry_repo.get_for_mission(session, mission_id, limit=limit)

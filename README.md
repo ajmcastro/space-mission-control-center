@@ -502,7 +502,7 @@ Auto-recovery: stuck rovers are auto-retried once after a 1-second hold.
 - [x] Mission inline edit (name, description) and cascade delete from Mission View
 - [x] Anomaly recovery side-effects — dismiss comm_loss restores rover to IDLE; dismiss low_battery recharges to 100%
 - [x] Plan resume from rover's current position after comm loss / low battery recovery
-- [ ] Timeline playback (step-by-step replay of past telemetry)
+- [x] Timeline playback (step-by-step replay of past telemetry with scrubber, play/pause, and speed control)
 
 ### V3
 - [ ] Reinforcement Learning planner interface
