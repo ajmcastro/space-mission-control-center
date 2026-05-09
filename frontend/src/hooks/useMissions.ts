@@ -1,11 +1,12 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { missionsApi, planningApi, simulationApi, type CreateMissionPayload } from '@/services/api';
-import type { Mission } from '@/types';
+import type { Mission, Plan } from '@/types';
 
 export const MISSIONS_KEY = ['missions'];
 export const missionKey = (id: string) => ['missions', id];
 export const envKey = (id: string) => ['missions', id, 'environment'];
 export const planKey = (id: string) => ['plans', id];
+export const missionPlansKey = (id: string) => ['plans', 'mission', id];
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
@@ -37,6 +38,25 @@ export function useMissionPlan(missionId: string, planId?: string | null) {
     queryFn: () =>
       planId ? planningApi.getPlan(planId) : planningApi.getMissionPlan(missionId),
     enabled: !!planId,
+  });
+}
+
+export function useMissionPlans(missionId: string) {
+  return useQuery({
+    queryKey: missionPlansKey(missionId),
+    queryFn: () => planningApi.listMissionPlans(missionId),
+    enabled: !!missionId,
+    refetchInterval: 3000,
+    select: (plans: Plan[]) => {
+      const byRoverId: Record<string, Plan> = {};
+      for (const p of plans) {
+        // keep most recent plan per rover
+        if (!byRoverId[p.rover_id] || p.created_at > byRoverId[p.rover_id].created_at) {
+          byRoverId[p.rover_id] = p;
+        }
+      }
+      return byRoverId;
+    },
   });
 }
 
@@ -106,18 +126,23 @@ export function useSpawnRover() {
 export function useAutoPlan() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: { mission_id: string; rover_id: string }) =>
+    mutationFn: (payload: { mission_id: string; rover_id: string; start_x?: number; start_y?: number }) =>
       planningApi.autoPlan(payload),
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: missionKey(data.mission_id) });
       qc.invalidateQueries({ queryKey: planKey(data.id) });
+      qc.invalidateQueries({ queryKey: missionPlansKey(data.mission_id) });
     },
   });
 }
 
 export function useRunPlan() {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: (payload: { mission_id: string; plan_id: string }) =>
       simulationApi.runPlan(payload),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ['rovers', vars.mission_id] });
+    },
   });
 }

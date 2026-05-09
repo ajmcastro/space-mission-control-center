@@ -78,6 +78,15 @@ class PlanRepository:
         row = result.scalar_one_or_none()
         return _plan_to_domain(row) if row else None
 
+    async def list_for_mission(self, session: AsyncSession, mission_id: str) -> list[Plan]:
+        result = await session.execute(
+            select(PlanRow)
+            .options(selectinload(PlanRow.steps))
+            .where(PlanRow.mission_id == mission_id)
+            .order_by(PlanRow.created_at.asc())
+        )
+        return [_plan_to_domain(row) for row in result.scalars().all()]
+
     async def delete_for_mission(self, session: AsyncSession, mission_id: str) -> None:
         """Delete all plans (and their steps via cascade) for a mission."""
         result = await session.execute(

@@ -384,10 +384,13 @@ Full OpenAPI spec at http://localhost:8000/openapi.json when the server is runni
 | DELETE | `/api/v1/missions/{id}` | Delete mission and all related data |
 | POST | `/api/v1/missions/{id}/start` | Start mission |
 | GET | `/api/v1/missions/{id}/environment` | Get terrain grid |
-| POST | `/api/v1/planning/auto` | Generate A* plan |
+| POST | `/api/v1/planning/auto` | Generate A* plan for a rover |
 | POST | `/api/v1/planning/manual` | Create manual plan |
+| GET | `/api/v1/planning/mission/{id}/all` | List all plans for a mission (one per rover) |
 | POST | `/api/v1/simulation/rovers` | Spawn rover |
-| POST | `/api/v1/simulation/run` | Execute plan (async) |
+| GET | `/api/v1/simulation/rovers` | List rovers (filter by `?mission_id=`) |
+| POST | `/api/v1/simulation/run` | Execute plan (async, multiple concurrent plans allowed) |
+| POST | `/api/v1/simulation/{id}/stop` | Stop all running plans for a mission |
 | GET | `/api/v1/simulation/{id}/status` | Simulation status |
 | WS | `/api/v1/telemetry/ws/{mission_id}` | Real-time telemetry stream |
 | GET | `/api/v1/telemetry/events/{mission_id}` | Telemetry history |
@@ -407,7 +410,8 @@ All settings are in `backend/core/config.py` and driven by environment variables
 | Variable | Default | Description |
 |---|---|---|
 | `DATABASE_URL` | SQLite local | `postgresql+asyncpg://...` for Postgres |
-| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection URL |
+| `USE_REDIS` | `false` | Set `true` to activate RedisStreamBus (falls back to in-memory if Redis is unreachable) |
 | `SIM_STEP_DELAY_SECONDS` | `0.5` | Pause between simulation steps |
 | `COMM_DELAY_SECONDS` | `2.5` | Simulated one-way comm delay |
 | `DEBUG` | `false` | Enable SQLAlchemy query logging |
@@ -495,10 +499,13 @@ Auto-recovery: stuck rovers are auto-retried once after a 1-second hold.
 - [x] SQLAlchemy async persistence (SQLite dev / PostgreSQL prod via `DATABASE_URL`)
 - [x] Repository pattern — `core/db_models/` ORM tables + `core/repositories/` data access layer
 - [x] Alembic migrations (`make migrate`, `make migrate-create`)
-- [ ] Redis Streams event bus (replace InMemoryEventBus)
-- [ ] Timeline playback UI
-- [ ] Telemetry charts (battery over time, path replay)
-- [ ] Multi-rover coordination (single mission, multiple rovers)
+- [x] Redis Streams event bus — set `USE_REDIS=true` to activate `RedisStreamBus` (auto-falls back to in-memory)
+- [x] Telemetry charts — battery % over time per rover (Charts tab in Mission View, powered by Recharts)
+- [x] Multi-rover coordination — spawn up to 4 rovers per mission, each with an independent A* plan running concurrently
+- [x] Mission inline edit (name, description) and cascade delete from Mission View
+- [x] Anomaly recovery side-effects — dismiss comm_loss restores rover to IDLE; dismiss low_battery recharges to 100%
+- [x] Plan resume from rover's current position after comm loss / low battery recovery
+- [ ] Timeline playback (step-by-step replay of past telemetry)
 
 ### V3
 - [ ] Reinforcement Learning planner interface

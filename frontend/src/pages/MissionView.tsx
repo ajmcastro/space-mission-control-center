@@ -1,16 +1,19 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import {
-  useMission, useMissionEnvironment, useMissionPlan, useRovers,
+  useMission, useMissionEnvironment, useMissionPlans, useRovers,
   useStartMission, useSpawnRover, useAutoPlan, useRunPlan,
-  useUpdateMission, useDeleteMission,
+  useUpdateMission, useDeleteMission, missionPlansKey,
 } from '@/hooks/useMissions';
 import { telemetryApi } from '@/services/api';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTelemetrySocket } from '@/hooks/useTelemetry';
+import { useMissionStore } from '@/store/missionStore';
 import { GridMap } from '@/components/GridMap';
 import { RoverStatus } from '@/components/RoverStatus';
 import { AnomalyAlert } from '@/components/AnomalyAlert';
+import { BatteryChart } from '@/components/BatteryChart';
 import { useState } from 'react';
+import type { Rover } from '@/types';
 
 function ActionBtn({ label, onClick, disabled, color = 'var(--btn-primary)' }: {
   label: string; onClick: () => void; disabled?: boolean; color?: string;
@@ -37,6 +40,70 @@ const STATUS_COLORS: Record<string, string> = {
   paused: '#f59e0b', completed: '#a855f7', failed: '#ef4444', aborted: '#dc2626',
 };
 
+function RoverPanel({
+  rover,
+  missionStatus,
+  plan,
+  onPlan,
+  onRun,
+  planPending,
+  runPending,
+}: {
+  rover: Rover;
+  missionStatus: string;
+  plan?: { id: string; total_commands: number; estimated_total_battery: number } | null;
+  onPlan: (roverId: string) => void;
+  onRun: (planId: string) => void;
+  planPending: boolean;
+  runPending: boolean;
+}) {
+  const canPlan = missionStatus === 'active';
+  const canRun  = missionStatus === 'active' && !!plan;
+
+  return (
+    <div style={{
+      background: 'var(--surface)', border: '1px solid var(--border)',
+      borderRadius: 8, padding: '10px 12px', marginBottom: 10,
+    }}>
+      <RoverStatus rover={rover} />
+      <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+        <button
+          onClick={() => onPlan(rover.id)}
+          disabled={!canPlan || planPending}
+          style={{
+            background: !canPlan || planPending ? 'var(--border)' : '#0369a1',
+            color: !canPlan || planPending ? 'var(--text-muted)' : '#fff',
+            border: 'none', borderRadius: 5, padding: '4px 10px',
+            fontSize: 11, cursor: !canPlan || planPending ? 'not-allowed' : 'pointer',
+            fontFamily: 'inherit', fontWeight: 600,
+          }}
+        >
+          {planPending ? 'Planning…' : plan ? `Plan (${plan.total_commands} steps)` : 'Auto Plan (A*)'}
+        </button>
+        <button
+          onClick={() => plan && onRun(plan.id)}
+          disabled={!canRun || runPending}
+          style={{
+            background: !canRun || runPending ? 'var(--border)' : '#b45309',
+            color: !canRun || runPending ? 'var(--text-muted)' : '#fff',
+            border: 'none', borderRadius: 5, padding: '4px 10px',
+            fontSize: 11, cursor: !canRun || runPending ? 'not-allowed' : 'pointer',
+            fontFamily: 'inherit', fontWeight: 600,
+          }}
+        >
+          {runPending ? 'Starting…' : 'Execute Plan'}
+        </button>
+      </div>
+      {plan && (
+        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 5 }}>
+          Est. battery cost: {plan.estimated_total_battery.toFixed(1)} ·{' '}
+          {plan.total_commands} commands
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function MissionView() {
   const { id: missionId = '' } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -45,7 +112,7 @@ export function MissionView() {
   const { data: mission, isLoading } = useMission(missionId);
   const { data: env } = useMissionEnvironment(missionId);
   const { data: rovers = [] } = useRovers(missionId);
-  const { data: plan } = useMissionPlan(missionId, mission?.plan_id);
+  const { data: plansByRover = {} } = useMissionPlans(missionId);
   const { data: anomalies = [] } = useQuery({
     queryKey: ['anomalies', missionId],
     queryFn: () => telemetryApi.getAnomalies(missionId),
@@ -53,20 +120,33 @@ export function MissionView() {
   });
   const { data: telemetryEvents = [] } = useQuery({
     queryKey: ['telemetry', missionId],
-    queryFn: () => telemetryApi.getEvents(missionId, 100),
+    queryFn: () => telemetryApi.getEvents(missionId, 200),
     refetchInterval: 2000,
+    enabled: !!missionId,
   });
 
-  const startMission   = useStartMission();
-  const spawnRover     = useSpawnRover();
-  const autoPlan       = useAutoPlan();
-  const runPlan        = useRunPlan();
-  const updateMission  = useUpdateMission();
-  const deleteMission  = useDeleteMission();
+  const telemetryBuffer = useMissionStore(s => s.telemetryBuffer);
 
-  const [resolveError, setResolveError]   = useState<string | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const startMission  = useStartMission();
+  const spawnRover    = useSpawnRover();
+  const autoPlan      = useAutoPlan();
+  const runPlan       = useRunPlan();
+  const updateMission = useUpdateMission();
+  const deleteMission = useDeleteMission();
+
+  const [resolveError, setResolveError]     = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete]   = useState(false);
   const [showAllAnomalies, setShowAllAnomalies] = useState(false);
+  const [roverName, setRoverName]           = useState('');
+  const [activeTab, setActiveTab]           = useState<'map' | 'telemetry' | 'charts' | 'explain'>('map');
+  const [showAllSteps, setShowAllSteps]     = useState(false);
+  const [editing, setEditing]               = useState(false);
+  const [editName, setEditName]             = useState('');
+  const [editDesc, setEditDesc]             = useState('');
+
+  // Track which rover's plan to show in Explain tab
+  const [explainRoverId, setExplainRoverId] = useState<string | null>(null);
+
   const dismissAll = useMutation({
     mutationFn: () => telemetryApi.dismissAll(missionId),
     onSuccess: () => {
@@ -96,35 +176,28 @@ export function MissionView() {
     },
   });
 
-  const [roverName, setRoverName]     = useState('Enc-Rover-1');
-  const [activeTab, setActiveTab]     = useState<'map' | 'telemetry' | 'explain'>('map');
-  const [showAllSteps, setShowAllSteps] = useState(false);
-
-  // Inline edit state
-  const [editing, setEditing]         = useState(false);
-  const [editName, setEditName]       = useState('');
-  const [editDesc, setEditDesc]       = useState('');
-
   useTelemetrySocket(missionId);
 
   if (isLoading) return <div style={{ padding: 32, color: 'var(--text-muted)' }}>Loading mission...</div>;
   if (!mission)  return <div style={{ padding: 32, color: 'var(--accent-red)' }}>Mission not found</div>;
 
-  const firstRover = rovers[0];
-  const canStart   = mission.status === 'draft' || mission.status === 'planned';
+  const canStart      = mission.status === 'draft' || mission.status === 'planned';
   const canSpawnRover = mission.status === 'active' && rovers.length < 4;
-  const canPlan    = !!firstRover && !mission.plan_id;
-  const canRun     = !!mission.plan_id && mission.status === 'active';
-
-  const plannedWaypoints: [number, number][] = plan?.waypoints ?? [];
-  const targetCells: [number, number][]       = mission.objectives.map(o => [o.target_x, o.target_y]);
-
   const completedCount = mission.objectives.filter(o => o.completed).length;
   const totalCount     = mission.objectives.length;
   const progressColor  = mission.progress_pct >= 100 ? '#a855f7'
     : mission.progress_pct > 0 ? '#22c55e' : 'var(--border)';
 
-  const displayedSteps = showAllSteps ? (plan?.steps ?? []) : (plan?.steps ?? []).slice(0, 30);
+  // Aggregate all plan waypoints for the map overlay
+  const allWaypoints: [number, number][] = Object.values(plansByRover)
+    .flatMap(p => p.waypoints as [number, number][]);
+  const targetCells: [number, number][] = mission.objectives.map(o => [o.target_x, o.target_y]);
+
+  const explainRover = rovers.find(r => r.id === explainRoverId) ?? rovers[0];
+  const explainPlan  = explainRover ? plansByRover[explainRover.id] : null;
+  const displayedSteps = showAllSteps
+    ? (explainPlan?.steps ?? [])
+    : (explainPlan?.steps ?? []).slice(0, 30);
 
   function startEdit() {
     setEditName(mission!.name);
@@ -132,16 +205,23 @@ export function MissionView() {
     setEditing(true);
   }
 
-  function cancelEdit() {
-    setEditing(false);
+  function handleAutoPlan(roverId: string) {
+    const rover = rovers.find(r => r.id === roverId);
+    autoPlan.mutate({
+      mission_id: missionId,
+      rover_id: roverId,
+      start_x: rover?.x ?? 0,
+      start_y: rover?.y ?? 0,
+    }, {
+      onSuccess: () => qc.invalidateQueries({ queryKey: missionPlansKey(missionId) }),
+    });
   }
 
-  function saveEdit() {
-    updateMission.mutate(
-      { id: missionId, payload: { name: editName, description: editDesc } },
-      { onSuccess: () => setEditing(false) }
-    );
+  function handleRunPlan(planId: string) {
+    runPlan.mutate({ mission_id: missionId, plan_id: planId });
   }
+
+  const nextRoverName = `Enc-Rover-${rovers.length + 1}`;
 
   return (
     <div style={{ padding: '20px 28px', maxWidth: 1600 }}>
@@ -176,7 +256,10 @@ export function MissionView() {
               />
               <div style={{ display: 'flex', gap: 8 }}>
                 <button
-                  onClick={saveEdit}
+                  onClick={() => updateMission.mutate(
+                    { id: missionId, payload: { name: editName, description: editDesc } },
+                    { onSuccess: () => setEditing(false) }
+                  )}
                   disabled={updateMission.isPending || !editName.trim()}
                   style={{
                     background: 'var(--btn-primary)', color: '#fff',
@@ -187,7 +270,7 @@ export function MissionView() {
                   {updateMission.isPending ? 'Saving…' : 'Save'}
                 </button>
                 <button
-                  onClick={cancelEdit}
+                  onClick={() => setEditing(false)}
                   style={{
                     background: 'none', color: 'var(--text-muted)',
                     border: '1px solid var(--border)', borderRadius: 6,
@@ -210,8 +293,7 @@ export function MissionView() {
                 style={{
                   marginTop: 2, background: 'none', border: '1px solid var(--border)',
                   borderRadius: 5, color: 'var(--text-muted)', cursor: 'pointer',
-                  fontSize: 12, padding: '3px 8px', fontFamily: 'inherit',
-                  flexShrink: 0,
+                  fontSize: 12, padding: '3px 8px', fontFamily: 'inherit', flexShrink: 0,
                 }}
               >
                 ✏ Edit
@@ -253,10 +335,11 @@ export function MissionView() {
       }}>
         <ActionBtn label="Start Mission" onClick={() => startMission.mutate(missionId)} disabled={!canStart} color="#16a34a" />
 
-        <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <input
-            value={roverName}
+            value={roverName || nextRoverName}
             onChange={e => setRoverName(e.target.value)}
+            placeholder={nextRoverName}
             style={{
               background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6,
               padding: '6px 10px', color: 'var(--text)', fontSize: 12, width: 140,
@@ -264,29 +347,18 @@ export function MissionView() {
           />
           <ActionBtn
             label="Spawn Rover"
-            onClick={() => spawnRover.mutate({ mission_id: missionId, name: roverName })}
+            onClick={() => {
+              spawnRover.mutate({ mission_id: missionId, name: roverName || nextRoverName });
+              setRoverName('');
+            }}
             disabled={!canSpawnRover}
             color="#7c3aed"
           />
         </div>
 
-        <ActionBtn
-          label="Auto Plan (A*)"
-          onClick={() => firstRover && autoPlan.mutate({ mission_id: missionId, rover_id: firstRover.id })}
-          disabled={!canPlan}
-          color="#0369a1"
-        />
-
-        <ActionBtn
-          label="Execute Plan"
-          onClick={() => mission.plan_id && runPlan.mutate({ mission_id: missionId, plan_id: mission.plan_id })}
-          disabled={!canRun}
-          color="#b45309"
-        />
-
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
           <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-            {rovers.length} rover(s) · {completedCount}/{totalCount} objectives
+            {rovers.length}/{4} rovers · {completedCount}/{totalCount} objectives
           </span>
 
           {confirmDelete ? (
@@ -305,9 +377,7 @@ export function MissionView() {
                 Cancel
               </button>
               <button
-                onClick={() =>
-                  deleteMission.mutate(missionId, { onSuccess: () => navigate('/') })
-                }
+                onClick={() => deleteMission.mutate(missionId, { onSuccess: () => navigate('/') })}
                 disabled={deleteMission.isPending}
                 style={{
                   background: 'none', color: '#dc2626', border: '1px solid #dc2626',
@@ -335,12 +405,12 @@ export function MissionView() {
       </div>
 
       {/* Main layout */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: 20, alignItems: 'start' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20, alignItems: 'start' }}>
 
         {/* Left: tabs */}
         <div>
           <div style={{ display: 'flex', gap: 2, marginBottom: 14 }}>
-            {(['map', 'telemetry', 'explain'] as const).map(tab => (
+            {(['map', 'telemetry', 'charts', 'explain'] as const).map(tab => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -364,7 +434,7 @@ export function MissionView() {
                 <GridMap
                   environment={env}
                   rovers={rovers}
-                  highlightPath={plannedWaypoints}
+                  highlightPath={allWaypoints}
                   targetCells={targetCells}
                   cellSize={26}
                 />
@@ -412,42 +482,76 @@ export function MissionView() {
             </div>
           )}
 
-          {activeTab === 'explain' && plan && (
+          {activeTab === 'charts' && (
             <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 10, padding: 16 }}>
-              <h3 style={{ fontSize: 13, color: 'var(--text-sec)', marginTop: 0 }}>Plan Explanation</h3>
-              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
-                Planner: <span style={{ color: 'var(--accent)' }}>{plan.planner}</span> ·{' '}
-                Steps: <span style={{ color: 'var(--text)' }}>{plan.total_commands}</span> ·{' '}
-                Est. battery: <span style={{ color: 'var(--accent-amber)' }}>{plan.estimated_total_battery.toFixed(1)}</span>
+              <h3 style={{ fontSize: 13, color: 'var(--text-sec)', marginTop: 0, marginBottom: 16 }}>
+                Battery Over Time
+              </h3>
+              <BatteryChart rovers={rovers} telemetryEvents={telemetryEvents} telemetryBuffer={telemetryBuffer} />
+            </div>
+          )}
+
+          {activeTab === 'explain' && (
+            <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 10, padding: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+                <h3 style={{ fontSize: 13, color: 'var(--text-sec)', margin: 0 }}>Plan Explanation</h3>
+                {rovers.length > 1 && (
+                  <select
+                    value={explainRoverId ?? rovers[0]?.id ?? ''}
+                    onChange={e => setExplainRoverId(e.target.value)}
+                    style={{
+                      background: 'var(--surface)', border: '1px solid var(--border)',
+                      borderRadius: 5, color: 'var(--text)', fontSize: 11,
+                      padding: '3px 8px', fontFamily: 'inherit', cursor: 'pointer',
+                    }}
+                  >
+                    {rovers.map(r => (
+                      <option key={r.id} value={r.id}>{r.name}</option>
+                    ))}
+                  </select>
+                )}
               </div>
-              <div style={{ fontFamily: 'monospace', fontSize: 11 }}>
-                {displayedSteps.map((step, i) => (
-                  <div key={i} style={{
-                    display: 'flex', gap: 10, padding: '3px 0',
-                    borderBottom: '1px solid var(--surface)', color: 'var(--text-sec)',
-                  }}>
-                    <span style={{ color: 'var(--text-muted)', minWidth: 24 }}>#{step.sequence}</span>
-                    <span style={{ color: 'var(--accent)', minWidth: 80 }}>{step.command.type}</span>
-                    {step.command.target_x != null && (
-                      <span>→ ({step.command.target_x},{step.command.target_y})</span>
-                    )}
-                    <span style={{ color: 'var(--text-muted)' }}>{step.rationale}</span>
+              {!explainPlan ? (
+                <p style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+                  No plan generated yet for {explainRover?.name ?? 'this rover'}.
+                </p>
+              ) : (
+                <>
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
+                    Planner: <span style={{ color: 'var(--accent)' }}>{explainPlan.planner}</span> ·{' '}
+                    Steps: <span style={{ color: 'var(--text)' }}>{explainPlan.total_commands}</span> ·{' '}
+                    Est. battery: <span style={{ color: 'var(--accent-amber)' }}>{explainPlan.estimated_total_battery.toFixed(1)}</span>
                   </div>
-                ))}
-              </div>
-              {plan.steps.length > 30 && (
-                <button
-                  onClick={() => setShowAllSteps(s => !s)}
-                  style={{
-                    marginTop: 10, background: 'none', border: '1px solid var(--border)',
-                    borderRadius: 6, color: 'var(--accent)', cursor: 'pointer',
-                    fontSize: 11, padding: '4px 12px', fontFamily: 'inherit',
-                  }}
-                >
-                  {showAllSteps
-                    ? 'Show fewer steps'
-                    : `Show all ${plan.steps.length} steps (${plan.steps.length - 30} more)`}
-                </button>
+                  <div style={{ fontFamily: 'monospace', fontSize: 11 }}>
+                    {displayedSteps.map((step, i) => (
+                      <div key={i} style={{
+                        display: 'flex', gap: 10, padding: '3px 0',
+                        borderBottom: '1px solid var(--surface)', color: 'var(--text-sec)',
+                      }}>
+                        <span style={{ color: 'var(--text-muted)', minWidth: 24 }}>#{step.sequence}</span>
+                        <span style={{ color: 'var(--accent)', minWidth: 80 }}>{step.command.type}</span>
+                        {step.command.target_x != null && (
+                          <span>→ ({step.command.target_x},{step.command.target_y})</span>
+                        )}
+                        <span style={{ color: 'var(--text-muted)' }}>{step.rationale}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {explainPlan.steps.length > 30 && (
+                    <button
+                      onClick={() => setShowAllSteps(s => !s)}
+                      style={{
+                        marginTop: 10, background: 'none', border: '1px solid var(--border)',
+                        borderRadius: 6, color: 'var(--accent)', cursor: 'pointer',
+                        fontSize: 11, padding: '4px 12px', fontFamily: 'inherit',
+                      }}
+                    >
+                      {showAllSteps
+                        ? 'Show fewer steps'
+                        : `Show all ${explainPlan.steps.length} steps (${explainPlan.steps.length - 30} more)`}
+                    </button>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -456,11 +560,26 @@ export function MissionView() {
         {/* Right sidebar */}
         <div>
           {/* Rovers */}
-          <h3 style={{ fontSize: 13, color: 'var(--text-sec)', margin: '0 0 10px 0' }}>Rovers</h3>
+          <h3 style={{ fontSize: 13, color: 'var(--text-sec)', margin: '0 0 10px 0' }}>
+            Rovers ({rovers.length}/4)
+          </h3>
           {rovers.length === 0 && (
-            <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>No rovers spawned. Start mission then spawn a rover.</p>
+            <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              Start the mission, then spawn rovers and assign plans.
+            </p>
           )}
-          {rovers.map(r => <RoverStatus key={r.id} rover={r} />)}
+          {rovers.map(r => (
+            <RoverPanel
+              key={r.id}
+              rover={r}
+              missionStatus={mission.status}
+              plan={plansByRover[r.id] ?? null}
+              onPlan={handleAutoPlan}
+              onRun={handleRunPlan}
+              planPending={autoPlan.isPending && autoPlan.variables?.rover_id === r.id}
+              runPending={runPlan.isPending && runPlan.variables?.plan_id === plansByRover[r.id]?.id}
+            />
+          ))}
 
           {/* Objectives */}
           <h3 style={{ fontSize: 13, color: 'var(--text-sec)', margin: '18px 0 10px 0' }}>Objectives</h3>

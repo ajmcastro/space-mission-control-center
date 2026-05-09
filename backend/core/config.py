@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     # Redis
     redis_url: str = "redis://localhost:6379/0"
     redis_stream_maxlen: int = 10_000
+    use_redis: bool = False  # set USE_REDIS=true to activate RedisStreamBus
 
     # Simulation
     sim_step_delay_seconds: float = 0.5

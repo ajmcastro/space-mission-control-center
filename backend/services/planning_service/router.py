@@ -55,3 +55,12 @@ async def get_mission_plan(
     if not plan:
         raise HTTPException(404, f"No plan for mission {mission_id}")
     return plan
+
+
+@router.get("/mission/{mission_id}/all", response_model=list[Plan])
+async def list_mission_plans(
+    mission_id: str,
+    svc: PlanningService = Depends(get_planning_service),
+    session: AsyncSession = Depends(get_session),
+) -> list[Plan]:
+    return await svc.list_plans_for_mission(session, mission_id)

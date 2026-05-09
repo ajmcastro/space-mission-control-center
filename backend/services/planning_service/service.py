@@ -143,3 +143,6 @@ class PlanningService:
 
     async def get_mission_plan(self, session: AsyncSession, mission_id: str) -> Plan | None:
         return await self._plans.get_for_mission(session, mission_id)
+
+    async def list_plans_for_mission(self, session: AsyncSession, mission_id: str) -> list[Plan]:
+        return await self._plans.list_for_mission(session, mission_id)

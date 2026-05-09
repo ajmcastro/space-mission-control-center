@@ -10,7 +10,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from core.config import settings
 from core.database import create_tables, AsyncSessionLocal
+from core.events.bus import EventBus
 from core.events.memory_bus import InMemoryEventBus
+from core.events.redis_bus import RedisStreamBus
 
 from services.mission_service.service import MissionService
 from services.planning_service.service import PlanningService
@@ -26,7 +28,7 @@ from services.explainability_service.router import router as explain_router
 log = structlog.get_logger(__name__)
 
 
-async def _telemetry_ws_listener(bus: InMemoryEventBus) -> None:
+async def _telemetry_ws_listener(bus: EventBus) -> None:
     """Forward telemetry bus events to connected WebSocket clients."""
     from services.telemetry_service.router import manager as ws_manager
     async for event in bus.subscribe(settings.telemetry_stream):
@@ -44,9 +46,22 @@ async def lifespan(app: FastAPI):
     # Initialise database tables (idempotent; Alembic manages schema in prod)
     await create_tables()
 
-    # Bootstrap the event bus (in-memory for V1/V2; swap to RedisStreamBus for V2.1)
-    bus = InMemoryEventBus()
-    await bus.connect()
+    # Bootstrap the event bus — Redis when USE_REDIS=true, in-memory otherwise
+    bus: EventBus
+    if settings.use_redis:
+        redis_bus = RedisStreamBus(settings.redis_url)
+        try:
+            await redis_bus.connect()
+            bus = redis_bus
+            log.info("event_bus", backend="redis", url=settings.redis_url)
+        except Exception as exc:
+            log.warning("redis_unavailable_falling_back", error=str(exc))
+            bus = InMemoryEventBus()
+            await bus.connect()
+    else:
+        bus = InMemoryEventBus()
+        await bus.connect()
+        log.info("event_bus", backend="in-memory")
 
     # Wire up singleton services — SimulationService gets the session factory
     # so its background execution tasks can create their own DB sessions

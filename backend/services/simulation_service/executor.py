@@ -9,7 +9,7 @@ from core.models.anomaly import Anomaly, AnomalyResolution
 from core.models.environment import Environment
 from core.events import EventBus, MissionEvent, EventType
 from core.config import settings
-from core.repositories import TelemetryRepository
+from core.repositories import TelemetryRepository, RoverRepository
 from .anomaly_engine import AnomalyEngine
 
 
@@ -18,6 +18,7 @@ class CommandExecutor:
         self._bus = event_bus
         self._anomaly_engine = AnomalyEngine()
         self._telemetry = TelemetryRepository()
+        self._rovers = RoverRepository()
 
     async def execute(
         self,
@@ -40,9 +41,9 @@ class CommandExecutor:
 
         try:
             if command.type == CommandType.MOVE:
-                await self._execute_move(command, rover, env)
+                await self._execute_move(command, rover, env, session)
             elif command.type == CommandType.COLLECT_SAMPLE:
-                await self._execute_sample(command, rover, env)
+                await self._execute_sample(command, rover, env, session)
             elif command.type == CommandType.WAIT:
                 await asyncio.sleep(settings.sim_step_delay_seconds)
             elif command.type == CommandType.CHARGE:
@@ -79,7 +80,9 @@ class CommandExecutor:
 
         return command, anomaly
 
-    async def _execute_move(self, command: Command, rover: Rover, env: Environment) -> None:
+    async def _execute_move(
+        self, command: Command, rover: Rover, env: Environment, session: AsyncSession
+    ) -> None:
         tx, ty = command.target_x, command.target_y
         cell = env.grid.get_cell(tx, ty)
         if not cell or not cell.passable:
@@ -88,6 +91,9 @@ class CommandExecutor:
         if rover.battery < cost:
             raise ValueError("Insufficient battery for move")
         rover.state = RoverState.MOVING
+        # Commit MOVING state so HTTP polls (every 2 s) see the rover in motion.
+        await self._rovers.save(session, rover)
+        await session.commit()
         await asyncio.sleep(settings.sim_step_delay_seconds)
         rover.move_to(tx, ty, cost)
         await self._bus.publish(MissionEvent(
@@ -98,10 +104,15 @@ class CommandExecutor:
             payload={"x": tx, "y": ty, "battery": rover.battery},
         ))
 
-    async def _execute_sample(self, command: Command, rover: Rover, env: Environment) -> None:
+    async def _execute_sample(
+        self, command: Command, rover: Rover, env: Environment, session: AsyncSession
+    ) -> None:
         if rover.battery < rover.spec.sample_cost:
             raise ValueError("Insufficient battery for sample collection")
         rover.state = RoverState.SAMPLING
+        # Commit SAMPLING state so HTTP polls see it during the collection delay.
+        await self._rovers.save(session, rover)
+        await session.commit()
         await asyncio.sleep(settings.sim_step_delay_seconds * 2)
         rover.collect_sample()
         cell = env.grid.get_cell(rover.x, rover.y)

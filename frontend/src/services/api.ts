@@ -49,6 +49,8 @@ export const planningApi = {
   getPlan: (id: string) => http.get<Plan>(`/planning/${id}`).then(r => r.data),
   getMissionPlan: (missionId: string) =>
     http.get<Plan>(`/planning/mission/${missionId}`).then(r => r.data),
+  listMissionPlans: (missionId: string) =>
+    http.get<Plan[]>(`/planning/mission/${missionId}/all`).then(r => r.data),
 };
 
 // ─── Simulation ──────────────────────────────────────────────────────────────
