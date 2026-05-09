@@ -1,0 +1,83 @@
+/* ── Theme tokens ──────────────────────────────────────────────────────────── */
+
+:root,
+[data-theme="dark"] {
+  --bg:            #0a0f1e;
+  --bg-sidebar:    #070d1a;
+  --surface:       #0f172a;
+  --surface-alt:   #0a1628;
+  --border:        #1e293b;
+  --border-strong: #273548;
+
+  --text:          #e2e8f0;
+  --text-sec:      #94a3b8;
+  --text-muted:    #475569;
+  --text-faint:    #334155;
+
+  --accent:        #38bdf8;
+  --accent-dim:    rgba(56, 189, 248, 0.12);
+  --accent-green:  #4ade80;
+  --accent-amber:  #f59e0b;
+  --accent-red:    #ef4444;
+  --accent-purple: #a855f7;
+
+  --btn-primary:   #1d4ed8;
+  --btn-primary-t: #fff;
+  --btn-sec:       #1e293b;
+  --btn-sec-t:     #94a3b8;
+  --btn-accent:    #0f4c35;
+  --btn-accent-t:  #4ade80;
+
+  --scrollbar-thumb: #1e293b;
+}
+
+[data-theme="light"] {
+  --bg:            #f1f5f9;
+  --bg-sidebar:    #e8edf5;
+  --surface:       #ffffff;
+  --surface-alt:   #f8fafc;
+  --border:        #e2e8f0;
+  --border-strong: #cbd5e1;
+
+  --text:          #0f172a;
+  --text-sec:      #334155;
+  --text-muted:    #64748b;
+  --text-faint:    #94a3b8;
+
+  --accent:        #0284c7;
+  --accent-dim:    rgba(2, 132, 199, 0.1);
+  --accent-green:  #16a34a;
+  --accent-amber:  #d97706;
+  --accent-red:    #dc2626;
+  --accent-purple: #7c3aed;
+
+  --btn-primary:   #1d4ed8;
+  --btn-primary-t: #fff;
+  --btn-sec:       #e2e8f0;
+  --btn-sec-t:     #475569;
+  --btn-accent:    #dcfce7;
+  --btn-accent-t:  #15803d;
+
+  --scrollbar-thumb: #cbd5e1;
+}
+
+/* ── Base reset ────────────────────────────────────────────────────────────── */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  transition: background 0.2s, color 0.2s;
+}
+
+::-webkit-scrollbar       { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }
+
+input, select, textarea, button { font-family: inherit; }
+
+/* Smooth theme transition for borders/backgrounds */
+div, aside, nav, main, section, header, footer { transition: background 0.2s, border-color 0.2s; }

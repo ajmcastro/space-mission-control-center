@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Enceladus Mission Control</title>
+    <meta name="description" content="Real-time rover mission control for Enceladus surface operations" />
+    <script>
+      /* Apply saved theme before first paint to avoid flash */
+      try {
+        var t = localStorage.getItem('mc-theme');
+        document.documentElement.setAttribute('data-theme', t === 'light' ? 'light' : 'dark');
+      } catch(e) {}
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,48 @@
+# Version control
+.git/
+.gitignore
+.github/
+
+# Python virtualenv and caches
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Database files (mounted at runtime or created fresh)
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+
+# Tests
+tests/
+backend/tests/
+
+# Docs / meta
+README.md
+CLAUDE.md
+Makefile
+
+# macOS
+.DS_Store
