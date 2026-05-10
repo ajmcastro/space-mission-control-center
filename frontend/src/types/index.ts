@@ -36,7 +36,7 @@ export interface Mission {
 
 export type RoverState =
   | 'idle' | 'moving' | 'sampling' | 'charging'
-  | 'stuck' | 'comm_lost' | 'error';
+  | 'stuck' | 'comm_lost' | 'error' | 'safe_mode';
 
 export interface RoverSpec {
   max_battery: number;
@@ -62,6 +62,9 @@ export interface Rover {
   total_distance: number;
   anomalies_encountered: number;
   created_at: string;
+  // FPS fields (V4)
+  anomaly_streak: number;
+  safe_mode_reason: string | null;
 }
 
 export type TerrainType = 'flat' | 'rocky' | 'ice' | 'crater' | 'geyser' | 'crevasse';
@@ -73,6 +76,8 @@ export interface Cell {
   elevation: number;
   has_sample: boolean;
   is_visited: boolean;
+  revealed: boolean;       // false = fog of war; terrain details hidden until rover enters sensor range
+  geyser_active: boolean;  // true = erupting (hazardous); false = dormant (safe, high science value)
 }
 
 export interface Grid {
@@ -89,6 +94,9 @@ export interface Environment {
   pressure_pa: number;
   active_geysers: [number, number][];
   hazard_zones: [number, number][];
+  // Dynamic terrain state (V4)
+  sim_tick: number;
+  is_night: boolean;
 }
 
 export type AnomalyType =

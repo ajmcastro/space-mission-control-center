@@ -39,6 +39,74 @@ async def _telemetry_ws_listener(bus: EventBus) -> None:
             })
 
 
+async def _event_persist_listener(bus: EventBus) -> None:
+    """
+    Persist key bus events to the telemetry DB so they appear in the REST endpoint.
+
+    The executor already persists POSITION/SAMPLE_COLLECTED/STATE_CHANGE rows for
+    every executed command.  This listener covers everything else: anomalies, FPS
+    decisions, terrain changes, mission lifecycle, and replanning.
+
+    TELEMETRY_EMITTED and CELLS_REVEALED are intentionally skipped (already
+    persisted by the executor and too noisy respectively).
+    """
+    from core.events.types import EventType
+    from core.models.telemetry import TelemetryEvent, TelemetryType
+    from core.repositories import TelemetryRepository
+
+    _SKIP = {EventType.TELEMETRY_EMITTED, EventType.CELLS_REVEALED, EventType.ROVER_MOVED}
+
+    _TYPE_MAP: dict[EventType, TelemetryType] = {
+        # Anomalies
+        EventType.ANOMALY_DETECTED:     TelemetryType.ANOMALY_DETECTED,
+        EventType.ANOMALY_RESOLVED:     TelemetryType.ANOMALY_DETECTED,
+        # Rover state
+        EventType.ROVER_STATE_CHANGED:  TelemetryType.STATE_CHANGE,
+        EventType.SAMPLE_COLLECTED:     TelemetryType.SAMPLE_COLLECTED,
+        # Fault Protection System
+        EventType.FPS_RULE_TRIGGERED:   TelemetryType.MISSION_EVENT,
+        EventType.SAFE_MODE_ENTERED:    TelemetryType.STATE_CHANGE,
+        EventType.SAFE_MODE_EXITED:     TelemetryType.STATE_CHANGE,
+        # Planning
+        EventType.REPLAN_TRIGGERED:     TelemetryType.MISSION_EVENT,
+        EventType.PLAN_CREATED:         TelemetryType.MISSION_EVENT,
+        # Dynamic terrain
+        EventType.GEYSER_ERUPTION:      TelemetryType.MISSION_EVENT,
+        EventType.GEYSER_DORMANCY:      TelemetryType.MISSION_EVENT,
+        EventType.ICE_FRACTURE:         TelemetryType.MISSION_EVENT,
+        EventType.FROST_CYCLE_START:    TelemetryType.MISSION_EVENT,
+        EventType.FROST_CYCLE_END:      TelemetryType.MISSION_EVENT,
+        # Mission lifecycle
+        EventType.MISSION_STARTED:      TelemetryType.MISSION_EVENT,
+        EventType.MISSION_COMPLETED:    TelemetryType.MISSION_EVENT,
+        EventType.MISSION_FAILED:       TelemetryType.MISSION_EVENT,
+        EventType.MISSION_ABORTED:      TelemetryType.MISSION_EVENT,
+    }
+
+    repo = TelemetryRepository()
+    streams = [settings.telemetry_stream, settings.anomaly_stream, settings.mission_stream]
+
+    async def _listen(stream: str) -> None:
+        async for event in bus.subscribe(stream, group="persist", consumer="persist"):
+            if event.type in _SKIP:
+                continue
+            telem_type = _TYPE_MAP.get(event.type, TelemetryType.MISSION_EVENT)
+            telem = TelemetryEvent(
+                type=telem_type,
+                mission_id=event.mission_id or "",
+                rover_id=event.rover_id or "",
+                payload={"event_type": event.type.value, **event.payload},
+            )
+            try:
+                async with AsyncSessionLocal() as session:
+                    await repo.append(session, telem)
+                    await session.commit()
+            except Exception as exc:
+                log.warning("event_persist_failed", event_type=event.type.value, error=str(exc))
+
+    await asyncio.gather(*[_listen(s) for s in streams])
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("startup", app=settings.app_name, version=settings.app_version)
@@ -71,15 +139,19 @@ async def lifespan(app: FastAPI):
     app.state.simulation_service = SimulationService(bus, AsyncSessionLocal)
     app.state.explainability_service = ExplainabilityService()
 
-    # Start background listener that pushes telemetry events to WebSocket clients
-    listener_task = asyncio.create_task(
+    # Background listeners
+    ws_task = asyncio.create_task(
         _telemetry_ws_listener(bus), name="telemetry-ws-listener"
+    )
+    persist_task = asyncio.create_task(
+        _event_persist_listener(bus), name="event-persist-listener"
     )
 
     log.info("services_ready", bus=bus.__class__.__name__)
     yield
 
-    listener_task.cancel()
+    ws_task.cancel()
+    persist_task.cancel()
     await bus.disconnect()
     log.info("shutdown")
 

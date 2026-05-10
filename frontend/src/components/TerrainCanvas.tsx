@@ -16,6 +16,9 @@ const TERRAIN_COLORS_3D: Record<TerrainType, string> = {
   crevasse: '#1a1a2e',
 };
 
+const GEYSER_DORMANT_COLOR_3D = '#5c3880';   // muted purple for dormant geyser
+const FROST_COLOR_3D          = '#6ab0d8';   // cooler blue tint for frosted flat/ice
+
 const TERRAIN_DESCRIPTIONS: Record<TerrainType, string> = {
   flat:     'Flat terrain — easy traversal, standard movement cost',
   rocky:    'Rocky terrain — rough surface, higher movement cost',
@@ -33,6 +36,7 @@ const ROVER_STATE_COLORS: Record<string, string> = {
   stuck:     '#ef4444',
   comm_lost: '#f97316',
   error:     '#dc2626',
+  safe_mode: '#06b6d4',  // cyan — standby / waiting for ground contact
 };
 
 interface TooltipInfo {
@@ -45,6 +49,7 @@ interface TooltipInfo {
   hasSample: boolean;
   isPath: boolean;
   isTarget: boolean;
+  fog: boolean;
   rover?: Rover;
 }
 
@@ -66,13 +71,14 @@ interface CellProps {
   color: string;
   isPath: boolean;
   isTarget: boolean;
+  fog: boolean;
   rover?: Rover;
   onHover: (info: TooltipInfo) => void;
   onHoverMove: (clientX: number, clientY: number) => void;
   onHoverEnd: () => void;
 }
 
-function TerrainCell({ x, z, gridX, gridY, elevation, hasSample, terrain, color, isPath, isTarget, rover, onHover, onHoverMove, onHoverEnd }: CellProps) {
+function TerrainCell({ x, z, gridX, gridY, elevation, hasSample, terrain, color, isPath, isTarget, fog, rover, onHover, onHoverMove, onHoverEnd }: CellProps) {
   const height = Math.max(0.2, 1 + elevation * ELEV_SCALE);
   const posY   = elevation * ELEV_SCALE * 0.5;
 
@@ -84,7 +90,7 @@ function TerrainCell({ x, z, gridX, gridY, elevation, hasSample, terrain, color,
       receiveShadow
       onPointerEnter={e => {
         e.stopPropagation();
-        onHover({ clientX: e.nativeEvent.clientX, clientY: e.nativeEvent.clientY, gridX, gridY, terrain, elevation, hasSample, isPath, isTarget, rover });
+        onHover({ clientX: e.nativeEvent.clientX, clientY: e.nativeEvent.clientY, gridX, gridY, terrain, elevation, hasSample, isPath, isTarget, fog, rover });
       }}
       onPointerMove={e => onHoverMove(e.nativeEvent.clientX, e.nativeEvent.clientY)}
       onPointerLeave={() => onHoverEnd()}
@@ -128,6 +134,7 @@ function RoverMarker({ rover, elevation, gridHeight, onHover, onHoverMove, onHov
         gridX: rover.x, gridY: rover.y,
         terrain: 'flat', elevation,
         hasSample: false, isPath: false, isTarget: false,
+        fog: false,   // rover position is always revealed
         rover,
       });
     },
@@ -195,25 +202,34 @@ function Tooltip({ info }: { info: TooltipInfo }) {
       )}
 
       {!info.rover && (
-        <>
-          <div style={{ color: '#94a3b8', fontSize: 11, marginBottom: 2 }}>
-            Terrain: <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{info.terrain}</span>
-          </div>
-          {info.elevation !== 0 && (
-            <div style={{ color: '#94a3b8', fontSize: 11, marginBottom: 2 }}>
-              Elevation: <span style={{ color: '#e2e8f0' }}>{info.elevation.toFixed(2)}</span>
-              <span style={{ color: '#64748b' }}> ({info.elevation > 0 ? 'ridge' : 'depression'})</span>
+        info.fog ? (
+          <>
+            <div style={{ color: '#475569', fontSize: 11, fontStyle: 'italic', marginBottom: 4 }}>
+              Unknown territory — deploy a rover to reveal
             </div>
-          )}
-          <div style={{ color: '#64748b', fontSize: 10, marginBottom: 4 }}>
-            {TERRAIN_DESCRIPTIONS[info.terrain]}
-          </div>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
-            {info.hasSample && <Tag color="#f59e0b">sample</Tag>}
-            {info.isTarget  && <Tag color="#f59e0b">objective</Tag>}
-            {info.isPath    && <Tag color="#4ade80">planned path</Tag>}
-          </div>
-        </>
+            {info.isTarget && <Tag color="#92400e">objective (uncharted)</Tag>}
+          </>
+        ) : (
+          <>
+            <div style={{ color: '#94a3b8', fontSize: 11, marginBottom: 2 }}>
+              Terrain: <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{info.terrain}</span>
+            </div>
+            {info.elevation !== 0 && (
+              <div style={{ color: '#94a3b8', fontSize: 11, marginBottom: 2 }}>
+                Elevation: <span style={{ color: '#e2e8f0' }}>{info.elevation.toFixed(2)}</span>
+                <span style={{ color: '#64748b' }}> ({info.elevation > 0 ? 'ridge' : 'depression'})</span>
+              </div>
+            )}
+            <div style={{ color: '#64748b', fontSize: 10, marginBottom: 4 }}>
+              {TERRAIN_DESCRIPTIONS[info.terrain]}
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+              {info.hasSample && <Tag color="#f59e0b">sample</Tag>}
+              {info.isTarget  && <Tag color="#f59e0b">objective</Tag>}
+              {info.isPath    && <Tag color="#4ade80">planned path</Tag>}
+            </div>
+          </>
+        )
       )}
     </div>
   );
@@ -274,21 +290,27 @@ export function TerrainCanvas({
             const isPath   = pathSet.has(key);
             const isTarget = targetSet.has(key);
             const rover    = roverMap.get(key);
+            const fog      = !cell.revealed;
             const cell_z   = grid.height - 1 - y;
-            let color = TERRAIN_COLORS_3D[cell.terrain] ?? '#3a8aad';
-            if (isTarget) color = '#d97706';
-            if (isPath)   color = '#16a34a';
+            // Fogged cells: flat dark block, no elevation extrusion, no terrain colour.
+            // Dynamic terrain: dormant geysers and frost get distinct colours.
+            let color = fog ? '#0d1117' : (TERRAIN_COLORS_3D[cell.terrain] ?? '#3a8aad');
+            if (!fog && cell.terrain === 'geyser' && !cell.geyser_active) color = GEYSER_DORMANT_COLOR_3D;
+            if (!fog && environment.is_night && (cell.terrain === 'flat' || cell.terrain === 'ice')) color = FROST_COLOR_3D;
+            if (!fog && isTarget) color = '#d97706';
+            if (!fog && isPath)   color = '#16a34a';
             return (
               <TerrainCell
                 key={key}
                 x={x} z={cell_z}
                 gridX={x} gridY={y}
-                elevation={cell.elevation ?? 0}
-                hasSample={cell.has_sample}
+                elevation={fog ? 0 : (cell.elevation ?? 0)}
+                hasSample={!fog && cell.has_sample}
                 terrain={cell.terrain}
                 color={color}
-                isPath={isPath}
+                isPath={!fog && isPath}
                 isTarget={isTarget}
+                fog={fog}
                 rover={rover}
                 onHover={handleHover}
                 onHoverMove={handleHoverMove}

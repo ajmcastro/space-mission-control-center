@@ -23,8 +23,9 @@ log = structlog.get_logger(__name__)
 _SYSTEM_PROMPT = (
     "You are an expert mission controller for the Enceladus rover program on Saturn's moon. "
     "Explain the following mission data in clear, concise language for ground operators. "
-    "Be specific about risks, battery budget implications, terrain challenges, and recommended "
-    "next actions. Two to four sentences maximum. Use precise technical language."
+    "Cover: planner strategy, key non-MOVE operations (sample collection, charging, waits), "
+    "battery budget risks, terrain or geyser hazards, objective completion status, and "
+    "recommended next actions. Use bullet points for clarity. Be technically precise."
 )
 
 
@@ -170,13 +171,64 @@ class ExplainabilityService:
             f"Estimated battery: {plan.estimated_total_battery:.1f} units",
         ]
         if mission:
-            lines.append(f"Objectives: {len(mission.objectives)}")
             completed = sum(1 for o in mission.objectives if o.completed)
-            lines.append(f"Completed objectives: {completed}/{len(mission.objectives)}")
+            lines.append(f"Objectives: {len(mission.objectives)} ({completed} completed)")
+            for o in mission.objectives:
+                status = "✓" if o.completed else "○"
+                lines.append(
+                    f"  {status} [{o.type.value}] target=({o.target_x},{o.target_y})"
+                    f" priority={o.priority}"
+                )
         if env:
             lines.append(f"Grid: {env.grid.width}x{env.grid.height}")
             lines.append(f"Active geysers: {len(env.active_geysers)}")
             lines.append(f"Temperature: {env.temperature_k:.0f} K")
+            lines.append(f"Night cycle active: {env.is_night}")
+
+        # Step-type breakdown
+        from collections import Counter
+        type_counts = Counter(s.command.type.value for s in plan.steps)
+        lines.append("Command breakdown: " + ", ".join(
+            f"{t}×{n}" for t, n in sorted(type_counts.items())
+        ))
+
+        # Full step list (capped at 120 to stay within token budget).
+        # Non-MOVE steps are always included; MOVE steps are summarised in runs.
+        MAX_STEPS = 120
+        step_lines: list[str] = []
+        move_run = 0  # consecutive MOVE steps being compressed
+
+        def _flush_run() -> None:
+            nonlocal move_run
+            if move_run:
+                step_lines.append(f"    ... {move_run} MOVE step(s) ...")
+                move_run = 0
+
+        for step in plan.steps[:MAX_STEPS]:
+            cmd = step.command
+            t = cmd.type.value
+            if t == "move":
+                move_run += 1
+            else:
+                _flush_run()
+                target = (
+                    f"({cmd.target_x},{cmd.target_y})"
+                    if cmd.target_x is not None else "—"
+                )
+                cost = f"{step.estimated_battery_cost:.1f}W"
+                note = f" [{step.rationale}]" if step.rationale else ""
+                step_lines.append(
+                    f"  #{step.sequence:>3} {t:<16} target={target:<12} cost={cost}{note}"
+                )
+        _flush_run()
+
+        if plan.total_commands > MAX_STEPS:
+            step_lines.append(f"  ... ({plan.total_commands - MAX_STEPS} more steps truncated)")
+
+        if step_lines:
+            lines.append("Step sequence:")
+            lines.extend(step_lines)
+
         if hasattr(plan, "metadata") and plan.metadata:
             lines.append(f"Planner metadata: {json.dumps(plan.metadata)}")
         return "\n".join(lines)

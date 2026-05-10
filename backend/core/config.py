@@ -62,5 +62,21 @@ class Settings(BaseSettings):
     physics_elevation_cost_factor: float = 0.5
     physics_thermal_anomaly_scale: float = 1.0
 
+    # Fog of War (V4)
+    fog_of_war: bool = True          # set FOG_OF_WAR=false to reveal all terrain at start
+    sensor_range: int = 2            # cells revealed in each direction from rover position
+
+    # Fault Protection System (V4)
+    fps_wheel_stuck_retry_limit: int = 2   # retries before attempting reverse
+    fps_comm_loss_retry_limit: int = 2     # wait cycles before safe mode on comm loss
+    fps_safe_mode_battery_pct: float = 10.0  # force safe mode when battery drops this low
+
+    # Dynamic Terrain Events (V4)
+    terrain_geyser_cycle_ticks: int = 15         # steps between geyser eruption/dormancy evaluations
+    terrain_geyser_flip_prob: float = 0.35       # probability each geyser changes state per cycle
+    terrain_fracture_prob_per_tick: float = 0.004  # probability crevasse spreads to adjacent cell each step
+    terrain_frost_period_ticks: int = 20         # full day/night cycle length (night = half this)
+    terrain_frost_cost_factor: float = 1.4       # movement cost multiplier during night frost
+
 
 settings = Settings()

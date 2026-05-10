@@ -475,6 +475,16 @@ All settings are in `backend/core/config.py` and driven by environment variables
 | `RL_WEIGHT_GEYSER` | `3.0` | RL value function: geyser avoidance penalty |
 | `PHYSICS_ELEVATION_COST_FACTOR` | `0.5` | Slope stress multiplier for wheel-stuck probability |
 | `PHYSICS_THERMAL_ANOMALY_SCALE` | `1.0` | Temperature anomaly probability scale factor |
+| `FOG_OF_WAR` | `true` | Enable fog of war — cells hidden until a rover enters sensor range |
+| `SENSOR_RANGE` | `2` | Chebyshev radius of cells revealed around rover position each step |
+| `FPS_WHEEL_STUCK_RETRY_LIMIT` | `2` | Consecutive wheel-stuck retries before FPS attempts a reverse manoeuvre |
+| `FPS_COMM_LOSS_RETRY_LIMIT` | `2` | Comm-loss wait cycles before FPS declares safe mode |
+| `FPS_SAFE_MODE_BATTERY_PCT` | `10.0` | Battery % below which FPS forces safe mode (CRITICAL low-battery anomaly) |
+| `TERRAIN_GEYSER_CYCLE_TICKS` | `15` | Steps between geyser eruption/dormancy evaluations |
+| `TERRAIN_GEYSER_FLIP_PROB` | `0.35` | Probability each geyser changes state per evaluation cycle |
+| `TERRAIN_FRACTURE_PROB_PER_TICK` | `0.004` | Probability a crevasse cell spreads to an adjacent flat/ice cell per step |
+| `TERRAIN_FROST_PERIOD_TICKS` | `20` | Full Enceladus day/night cycle length in simulation steps (night = half) |
+| `TERRAIN_FROST_COST_FACTOR` | `1.4` | Movement cost multiplier applied to flat/ice cells during night frost |
 
 ---
 
@@ -511,6 +521,8 @@ REDIS_URL=redis://localhost:6379/0   # default; override if needed
 ```
 
 `main.py` reads `USE_REDIS` at startup and activates `RedisStreamBus` automatically. If Redis is unreachable, it falls back to `InMemoryEventBus` and logs a warning.
+
+`InMemoryEventBus` uses broadcast pub-sub semantics: every `subscribe()` call creates an independent queue, so multiple concurrent consumers (WebSocket telemetry forwarder, DB persistence listener) each receive the full event stream without stealing messages from one another. An `_event_persist_listener` background task in `main.py` subscribes to all three streams (`telemetry`, `anomaly`, `mission`) and persists key events — anomalies, FPS decisions, terrain changes, mission lifecycle — directly to the telemetry DB table.
 
 ---
 
@@ -570,6 +582,17 @@ Severity levels: `low`, `medium`, `high`, `critical`. All anomalies are persiste
 - [x] 3D visualization — React Three Fiber terrain canvas, per-cell meshes with elevation extrusion, location-pin rover markers with bob animation and shadow ring, hover tooltips (lazy-loaded in "3D" tab)
 - [x] Anomalies tab — full anomaly history with sort (newest / oldest / severity) and filter (status / type / severity) controls; sidebar shows only active anomalies newest-first with direct dismiss actions; Anomalies tab button shows live badge count
 
+### V4 (planned)
+- [x] **Fog of War / terrain discovery** — cells start unknown until a rover enters sensor range (Chebyshev radius, default 2); map fills in progressively in both 2D and 3D views; fogged cells hide terrain type, elevation, and samples; objectives remain visible as uncharted markers; set `FOG_OF_WAR=false` to disable
+- [x] **Fault Protection System** — tiered autonomous fault response per anomaly type (retry → reverse → replan → safe mode); `FaultProtectionEngine` runs after every anomaly in the execution loop; rover enters `safe_mode` state on critical faults, exits when ground control resolves the anomaly; configurable retry/replan thresholds via env vars
+- [x] **Dynamic terrain events** — geyser eruption cycles (active ↔ dormant per configurable probability); ice fracture propagation (crevasse spreads to adjacent flat/ice cells); surface frost (day/night cycle multiplies flat/ice movement costs); all changes published on event bus; FPS auto-replans when fracture/eruption blocks planned path; 2D and 3D maps reflect live terrain state; frost/night status shown in map status bar
+- [x] **Telemetry enrichment** — executor emits the correct `TelemetryType` per command (POSITION / SAMPLE_COLLECTED / STATE_CHANGE / HEARTBEAT / COMMAND_ACK); `_event_persist_listener` in `main.py` persists anomaly, FPS, terrain, and mission-lifecycle bus events to the DB so all event types appear in the Telemetry tab; `InMemoryEventBus` upgraded to broadcast pub-sub (each subscriber gets its own queue, multiple concurrent listeners no longer steal events from each other); Telemetry tab updated with rover/type filters, 50-row pagination, up to 2 000 events, and colour-coded event-type badges
+- [x] **Explain tab improvements** — `_build_llm_context()` now sends Claude the full step sequence (MOVE runs compressed, non-MOVE steps shown with target, battery cost, and rationale), the objectives list with completion status, command-type breakdown, and night-cycle state; system prompt updated to request bullet-point analysis; Explain tab UI gains a command-type filter dropdown, 30-step pagination with « ‹ / › » controls, battery cost column, and visual highlighting for non-MOVE steps
+- [x] **Objective completion bug fix** — terrain-replan block in `_run_plan_loop` was missing a `continue` statement, causing `idx += 1` to run after resetting `idx = 0`, which skipped the first (sometimes only) step of the new plan; added `continue` to match the FPS-anomaly replan path; also added a final post-loop objective check as a safety net so the rover's ending position is always compared against remaining objectives before the mission-completion test runs
+- [ ] **Science Value Map + coverage optimiser** — per-cell science scores (geyser proximity, ice-water interfaces, craters); multi-agent coordinator assigns objectives to maximise science return per unit battery rather than minimising distance; coverage heatmap overlay
+- [ ] **AEGIS-style autonomous target selection** — rovers score adjacent cells each step and self-generate objectives when the human list is exhausted; configurable autonomy level per rover (`supervised` / `semi-autonomous` / `fully autonomous`)
+- [ ] **Communication windows** — configurable uplink windows per sol; commands queued outside a window held in an uplink queue; rovers execute onboard plan autonomously between windows; Timeline shows comm window bands
+
 ---
 
 ## Development
@@ -611,9 +634,9 @@ CLAUDE_MODEL=claude-sonnet-4-6   # default
 
 The `GET /api/v1/explain/llm/{subject}/{id}` endpoint streams a Server-Sent Events response. In the UI, click **Ask Claude** in the Explain tab. If the key is absent, the endpoint returns a plain-text fallback message — no errors or crashes.
 
-The streamed response is rendered as Markdown using `react-markdown` with theme-matched component overrides (see `MissionView.tsx` → Claude Analysis section). Claude should return Markdown — prompts in `_build_llm_context()` already encourage structured output with headings and lists.
+The streamed response is rendered as Markdown using `react-markdown` with theme-matched component overrides (see `MissionView.tsx` → Claude Analysis section).
 
-To extend the context Claude receives, edit `_build_llm_context()` in `explainability_service/service.py`. The method returns a plain string that is passed directly as the user message.
+`_build_llm_context()` in `explainability_service/service.py` builds the user message sent to Claude. It now includes: mission name and planner type; objectives list with type, target, priority, and completion status; command-type breakdown (e.g. `move×47, collect_sample×3`); the full step sequence capped at 120 entries (MOVE runs compressed to `... N MOVE step(s) ...`, non-MOVE steps shown with target coordinates, battery cost, and rationale); and environment data (grid size, geyser count, temperature, night-cycle status). Extend it here to feed Claude additional context.
 
 ### Tuning the RL planner
 
@@ -636,3 +659,128 @@ RL_EPISODE_BUDGET=500   # max steps before fallback to A*
 ```
 
 To swap in a trained neural policy, subclass or replace `_value()` in `rl_planner.py` — the rest of the planning loop stays unchanged.
+
+---
+
+## Features Backlog
+
+Candidate features grounded in real planetary rover operations software (MER, MSL Curiosity, Mars 2020 Perseverance, and proposed ocean-world mission concepts). V4 priorities are marked ★.
+
+---
+
+### 🤖 Rover Autonomy & Self-Directed Operations
+
+#### ★ 1. AEGIS-style Onboard Target Selection
+Real precedent: Perseverance uses AEGIS (Autonomous Exploration for Gathering Increased Science) to autonomously identify and laser-fire on targets without an Earth uplink. For Enceladus this means:
+- Rovers score adjacent cells each step for scientific value (geyser proximity, sample density, unexplored territory, elevation gradient).
+- A configurable **autonomy level** per rover: `supervised` (propose targets, wait for approval), `semi-autonomous` (act within a pre-approved zone), `fully autonomous` (self-directed within resource budgets).
+- Rovers **generate their own objectives** when the human-assigned list is exhausted, prioritising unexplored terrain and high-science cells.
+
+#### 2. Resource-Aware Mission Scheduling (MEXEM / SEQGEN-style)
+JPL's SEQGEN tool schedules activities around resource windows. Here:
+- A **resource budget model** per rover: battery capacity, sample storage slots, max steps per sol.
+- Rover refuses or defers activities that would violate budgets rather than failing mid-execution.
+- **Sol planning** — groups commands into sols with a rest/charge phase between them; Timeline shows sol boundaries as coloured bands.
+
+#### ★ 3. Fault Protection System (FPS)
+Every real rover has a tiered fault response system (modelled on Curiosity's FPS):
+- **Fault rules** defined per anomaly type: e.g. `if wheel_stuck AND slope > 0.6 → attempt_reverse THEN replan`.
+- **Safe mode** trigger — if battery drops below a critical threshold or 3+ anomalies occur in one sol, rover autonomously halts, stops non-essential systems, and waits for ground contact.
+- **Watchdog** — if no telemetry for N steps, simulation marks rover as `contact_lost` and queues a recovery uplink for the next comm window.
+
+#### 4. Opportunistic Science
+Rovers deviate slightly from their planned path to collect a sample or investigate a newly detected feature — without waiting for a ground command:
+- A **deviation budget** (e.g. max 3 cells off-path) configurable per rover.
+- Deviations logged as `opportunistic_science` events in telemetry, visible in the Timeline tab.
+- Claude can explain why a rover deviated from its original plan.
+
+---
+
+### 🗺️ Planning & Path Intelligence
+
+#### 5. Dynamic Replanning with Shared Hazard Maps
+- Rovers build a shared **hazard map** from their traversal history — cells where anomalies occurred accumulate a cost penalty for future planning.
+- The hazard map persists across replans and is visible as an overlay on the 2D/3D map.
+- The multi-agent coordinator uses the shared hazard map so Rover 2 avoids cells that caused Rover 1 to get stuck.
+
+#### ★ 6. Communication Windows & Uplink Scheduling
+Enceladus is ~1.3 billion km from Earth — a fundamental operational constraint:
+- Configurable **comm windows** (e.g. two uplink windows per sol, each 20 minutes).
+- Commands queued outside a window are held in an **uplink queue** with estimated delivery timestamps.
+- Rovers execute their onboard plan autonomously between windows; ground can only intervene during an open window.
+- Timeline shows comm windows as coloured bands; anomalies detected between windows are surfaced at the next uplink.
+
+#### ★ 7. Science Value Map & Coverage Optimisation
+- Each cell carries a **science value** score (higher near geysers, ice-water interfaces, craters, and unexplored regions).
+- A **coverage optimiser** (greedy or RL-based) assigns objectives to maximise total science return per unit of battery spent — replacing the current distance-only multi-agent assignment.
+- A **coverage heatmap** overlay in the 2D/3D map shows which areas have been scientifically characterised vs. unexplored.
+
+---
+
+### 🧪 Science Operations
+
+#### 8. Sample Chain of Custody
+Real missions track every sample from collection through analysis:
+- Samples carry an ID, collection timestamp, location, terrain type, and analysis state (`collected → analysed → archived`).
+- A **Sample Registry** tab — table of all collected samples with full metadata, sortable and filterable.
+- Samples can be "analysed" (costs battery, takes time, generates a science event) or held for later.
+- Claude can summarise the scientific significance of the sample set.
+
+#### 9. Instrument Health Dashboard
+Rovers carry science instruments that degrade with use and anomaly events:
+- Each rover has instruments (spectrometer, camera, drill) with a **health percentage** that degrades per use and with fault events.
+- Instruments below a health threshold become unreliable, increasing the probability of `sensor_fault` anomalies.
+- Instrument health is visible per rover in the sidebar panel, with maintenance recommendations from Claude.
+
+---
+
+### 🌍 Environment & Simulation Fidelity
+
+#### ★ 10. Dynamic Terrain Events
+Enceladus is one of the most geologically active bodies in the Solar System — the environment should change during a mission:
+- **Geyser eruption cycles** — geyser cells activate and deactivate on a schedule or probabilistically; active geysers are impassable, dormant ones are high-science targets.
+- **Ice fracture propagation** — crevasse cells can spread to adjacent flat or ice cells over time, closing off previously planned routes.
+- **Surface frost** — terrain costs increase during the Enceladus "night" (~32-hour rotation period), reducing battery efficiency and movement speed.
+- All events appear in the Timeline and trigger anomaly alerts.
+
+#### ★ 11. Fog of War / Terrain Feature Discovery
+- Cells start as `unknown` until a rover enters sensor range (configurable radius).
+- The 2D and 3D maps reveal terrain progressively as rovers explore — unknown cells are shown dark and featureless.
+- Scientific value of a cell cannot be assessed until it is revealed, creating a meaningful exploration vs. exploitation trade-off.
+- Directly incentivises coverage-optimising planners and the AEGIS target-selection feature.
+
+---
+
+### 📡 Ground Operations
+
+#### 12. Mission Replay & What-If Analysis
+- Load a completed mission and replay it from any point, then branch off with different planning decisions.
+- "What if Rover 2 had gone left instead of right?" — re-runs the simulation from a saved checkpoint with a different plan.
+- Useful for post-mission analysis, operator training, and comparing planner performance.
+
+#### 13. Operations Metrics Dashboard
+Real missions track engineering and science efficiency KPIs:
+- **Science return rate** — samples collected per unit battery consumed.
+- **Plan adherence** — percentage of planned steps executed without deviation or replan.
+- **Uptime** — percentage of mission time rovers were active vs. stuck / in safe mode.
+- **Terrain coverage** — percentage of grid cells visited at least once.
+- Displayed on the Dashboard per mission, alongside existing mission status cards.
+
+#### 14. Multi-Mission Fleet View
+Extend the Dashboard to support simultaneous mission oversight:
+- A **fleet overview map** showing all active missions on their respective grids simultaneously, with live rover positions.
+- Cross-mission resource summary: total active rovers, total pending anomalies, total science events across the fleet.
+- Alert roll-up: a single view for every critical anomaly across all running missions, with one-click navigation to the affected mission.
+
+---
+
+### Priority Summary
+
+| Priority | Feature | Rationale |
+|---|---|---|
+| ★ 1 | Fog of War / terrain discovery (#11) | Changes every session's exploration dynamic; minimal backend changes |
+| ★ 2 | Fault Protection System (#3) | Closes the gap between current "dismiss anomaly" and real autonomous recovery |
+| ★ 3 | Dynamic terrain events (#10) | Makes long missions feel alive; Enceladus's active geology is the core narrative |
+| ★ 4 | Science Value Map + coverage optimiser (#7) | Replaces distance-only multi-agent assignment with scientifically motivated planning |
+| ★ 5 | AEGIS-style target selection (#1) | The headline autonomy feature — rovers that pursue their own science goals |
+| ★ 6 | Communication windows (#6) | The most authentic Enceladus-specific constraint; fundamentally changes the planning rhythm |

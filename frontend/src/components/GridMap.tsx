@@ -20,6 +20,12 @@ const TERRAIN_COLORS: Record<TerrainType, string> = {
   crevasse: '#0a0a0a',
 };
 
+// Dormant geysers are safe traversal targets — distinct muted colour.
+const GEYSER_DORMANT_COLOR = '#4a3060';
+
+// Surface frost — subtle blue tint during Enceladus night.
+const FROST_OVERLAY_COLOR = 'rgba(120,180,255,0.18)';
+
 const TERRAIN_LABELS: Record<TerrainType, string> = {
   flat: 'F', rocky: 'R', ice: 'I', crater: 'C', geyser: 'G', crevasse: '█',
 };
@@ -44,6 +50,8 @@ interface TooltipInfo {
   isPath: boolean;
   isTarget: boolean;
   isHistory: boolean;
+  fog: boolean;
+  geyserActive: boolean;
   rover?: Rover;
 }
 
@@ -88,9 +96,11 @@ export function GridMap({
     isPath: boolean,
     isTarget: boolean,
     isHistory: boolean,
-    rover?: Rover,
+    rover: Rover | undefined,
+    fog: boolean,
+    geyserActive: boolean,
   ) => {
-    setTooltip({ clientX: e.clientX, clientY: e.clientY, gridX: x, gridY: y, terrain, elevation, hasSample, isPath, isTarget, isHistory, rover });
+    setTooltip({ clientX: e.clientX, clientY: e.clientY, gridX: x, gridY: y, terrain, elevation, hasSample, isPath, isTarget, isHistory, fog, geyserActive, rover });
   }, []);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
@@ -112,38 +122,61 @@ export function GridMap({
             const isTgt  = targetSet.has(key);
             const isHist = historySet.has(key);
             const rover  = roverMap[key];
+            const fog    = !cell.revealed;
             const px = x * cellSize;
             const py = y * cellSize;
+
+            // Dynamic terrain colours
+            const isDormantGeyser = !fog && cell.terrain === 'geyser' && !cell.geyser_active;
+            const baseFill = fog ? '#0d1117'
+              : isDormantGeyser ? GEYSER_DORMANT_COLOR
+              : TERRAIN_COLORS[cell.terrain];
+            const isFrosty = !fog && environment.is_night &&
+              (cell.terrain === 'flat' || cell.terrain === 'ice');
 
             return (
               <g
                 key={key}
                 style={{ cursor: 'crosshair' }}
-                onMouseEnter={e => handleMouseEnter(e, x, y, cell.terrain, cell.elevation ?? 0, cell.has_sample, isPath, isTgt, isHist, rover)}
+                onMouseEnter={e => handleMouseEnter(e, x, y, cell.terrain, cell.elevation ?? 0, cell.has_sample, isPath, isTgt, isHist, rover, fog, cell.geyser_active ?? true)}
               >
+                {/* Base fill — fog cells render as uniform near-black */}
                 <rect x={px} y={py} width={cellSize} height={cellSize}
-                  fill={TERRAIN_COLORS[cell.terrain]} stroke="#0d1b2a" strokeWidth={0.5} />
+                  fill={baseFill}
+                  stroke={fog ? '#111827' : '#0d1b2a'}
+                  strokeWidth={0.5} />
 
-                {isHist && !rover && (
+                {/* Subtle inner border gives fogged cells a tiled texture */}
+                {fog && (
+                  <rect x={px + 1} y={py + 1} width={cellSize - 2} height={cellSize - 2}
+                    fill="none" stroke="#1a2332" strokeWidth={0.3} />
+                )}
+
+                {/* Surface frost overlay during Enceladus night */}
+                {isFrosty && (
+                  <rect x={px} y={py} width={cellSize} height={cellSize}
+                    fill={FROST_OVERLAY_COLOR} />
+                )}
+
+                {/* Dormant geyser indicator — small pulsing dot */}
+                {isDormantGeyser && !rover && (
+                  <circle cx={px + cellSize / 2} cy={py + cellSize / 2} r={2.5}
+                    fill="#c4b5fd" opacity={0.7} />
+                )}
+
+                {/* Revealed-only overlays */}
+                {!fog && isHist && !rover && (
                   <rect x={px} y={py} width={cellSize} height={cellSize}
                     fill="rgba(56, 189, 248, 0.18)" />
                 )}
-
-                {isPath && !rover && (
+                {!fog && isPath && !rover && (
                   <rect x={px + 4} y={py + 4} width={cellSize - 8} height={cellSize - 8}
                     rx={3} fill="rgba(99, 210, 130, 0.35)" stroke="#4ade80" strokeWidth={1} />
                 )}
-
-                {isTgt && (
-                  <rect x={px + 2} y={py + 2} width={cellSize - 4} height={cellSize - 4}
-                    rx={3} fill="none" stroke="#f59e0b" strokeWidth={2} strokeDasharray="4 2" />
-                )}
-
-                {cell.has_sample && !rover && (
+                {!fog && cell.has_sample && !rover && (
                   <circle cx={px + cellSize / 2} cy={py + cellSize / 2} r={3} fill="#f59e0b" />
                 )}
-
-                {!rover && (
+                {!fog && !rover && (
                   <text x={px + cellSize / 2} y={py + cellSize / 2 + 3}
                     textAnchor="middle"
                     fill={cell.terrain === 'crevasse' ? '#333' : 'rgba(255,255,255,0.3)'}
@@ -152,6 +185,15 @@ export function GridMap({
                   </text>
                 )}
 
+                {/* Objectives visible even in fog — known from orbital survey data */}
+                {isTgt && (
+                  <rect x={px + 2} y={py + 2} width={cellSize - 4} height={cellSize - 4}
+                    rx={3} fill="none"
+                    stroke={fog ? '#92400e' : '#f59e0b'}
+                    strokeWidth={2} strokeDasharray="4 2" />
+                )}
+
+                {/* Rover always visible */}
                 {rover && (
                   <g>
                     <circle cx={px + cellSize / 2} cy={py + cellSize / 2}
@@ -200,39 +242,60 @@ export function GridMap({
             ({tooltip.gridX}, {tooltip.gridY})
           </div>
 
-          {tooltip.rover && (
-            <div style={{ marginBottom: 6, paddingBottom: 6, borderBottom: '1px solid #1e293b' }}>
-              <div style={{ fontWeight: 600, color: roverStateColor(tooltip.rover.state) }}>
-                {tooltip.rover.name}
+          {tooltip.fog && !tooltip.rover ? (
+            <>
+              <div style={{ color: '#475569', fontSize: 11, fontStyle: 'italic', marginBottom: 4 }}>
+                Unknown territory — deploy a rover to reveal
               </div>
-              <div style={{ color: '#94a3b8', fontSize: 11 }}>
-                State: {tooltip.rover.state.replace('_', ' ')} · Battery: {tooltip.rover.battery_pct.toFixed(1)}%
-              </div>
-              <div style={{ color: '#94a3b8', fontSize: 11 }}>
-                Steps: {tooltip.rover.steps_taken} · Samples: {tooltip.rover.samples_collected}
-              </div>
-            </div>
-          )}
+              {tooltip.isTarget && <Tag color="#92400e">objective (uncharted)</Tag>}
+            </>
+          ) : (
+            <>
+              {tooltip.rover && (
+                <div style={{ marginBottom: 6, paddingBottom: 6, borderBottom: '1px solid #1e293b' }}>
+                  <div style={{ fontWeight: 600, color: roverStateColor(tooltip.rover.state) }}>
+                    {tooltip.rover.name}
+                  </div>
+                  <div style={{ color: '#94a3b8', fontSize: 11 }}>
+                    State: {tooltip.rover.state.replace('_', ' ')} · Battery: {tooltip.rover.battery_pct.toFixed(1)}%
+                  </div>
+                  <div style={{ color: '#94a3b8', fontSize: 11 }}>
+                    Steps: {tooltip.rover.steps_taken} · Samples: {tooltip.rover.samples_collected}
+                  </div>
+                </div>
+              )}
 
-          <div style={{ color: '#94a3b8', fontSize: 11, marginBottom: 2 }}>
-            Terrain: <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{tooltip.terrain}</span>
-          </div>
-          {tooltip.elevation !== 0 && (
-            <div style={{ color: '#94a3b8', fontSize: 11, marginBottom: 2 }}>
-              Elevation: <span style={{ color: '#e2e8f0' }}>{tooltip.elevation.toFixed(2)}</span>
-              <span style={{ color: '#64748b' }}> ({tooltip.elevation > 0 ? 'ridge' : 'depression'})</span>
-            </div>
-          )}
-          <div style={{ color: '#64748b', fontSize: 10, marginBottom: 4 }}>
-            {TERRAIN_DESCRIPTIONS[tooltip.terrain]}
-          </div>
+              <div style={{ color: '#94a3b8', fontSize: 11, marginBottom: 2 }}>
+                Terrain: <span style={{ color: '#e2e8f0', fontWeight: 600 }}>{tooltip.terrain}</span>
+              </div>
+              {tooltip.elevation !== 0 && (
+                <div style={{ color: '#94a3b8', fontSize: 11, marginBottom: 2 }}>
+                  Elevation: <span style={{ color: '#e2e8f0' }}>{tooltip.elevation.toFixed(2)}</span>
+                  <span style={{ color: '#64748b' }}> ({tooltip.elevation > 0 ? 'ridge' : 'depression'})</span>
+                </div>
+              )}
+              <div style={{ color: '#64748b', fontSize: 10, marginBottom: 4 }}>
+                {TERRAIN_DESCRIPTIONS[tooltip.terrain]}
+              </div>
 
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
-            {tooltip.hasSample && <Tag color="#f59e0b">sample</Tag>}
-            {tooltip.isTarget && <Tag color="#f59e0b">objective</Tag>}
-            {tooltip.isPath && <Tag color="#4ade80">planned path</Tag>}
-            {tooltip.isHistory && !tooltip.rover && <Tag color="#38bdf8">traversed</Tag>}
-          </div>
+              {tooltip.terrain === 'geyser' && (
+                <div style={{ fontSize: 10, color: tooltip.geyserActive ? '#c084fc' : '#86efac', marginBottom: 4 }}>
+                  {tooltip.geyserActive
+                    ? '🌋 Erupting — hazardous traversal'
+                    : '💤 Dormant — safe, high science value'}
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                {tooltip.hasSample && <Tag color="#f59e0b">sample</Tag>}
+                {tooltip.isTarget && <Tag color="#f59e0b">objective</Tag>}
+                {tooltip.isPath && <Tag color="#4ade80">planned path</Tag>}
+                {tooltip.isHistory && !tooltip.rover && <Tag color="#38bdf8">traversed</Tag>}
+                {environment.is_night && (tooltip.terrain === 'flat' || tooltip.terrain === 'ice') && (
+                  <Tag color="#93c5fd">frost active</Tag>
+                )}
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -245,6 +308,10 @@ export function GridMap({
           </span>
         ))}
         <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <span style={{ width: 12, height: 12, background: GEYSER_DORMANT_COLOR, border: '1px solid #333', display: 'inline-block' }} />
+          geyser (dormant)
+        </span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <span style={{ width: 12, height: 12, background: 'rgba(99,210,130,0.35)', border: '1px solid #4ade80', display: 'inline-block' }} />
           planned path
         </span>
@@ -256,6 +323,15 @@ export function GridMap({
           <span style={{ width: 12, height: 12, border: '2px dashed #f59e0b', display: 'inline-block' }} />
           objective
         </span>
+        {environment.is_night && (
+          <span style={{
+            display: 'flex', alignItems: 'center', gap: 4,
+            background: 'rgba(120,180,255,0.15)', border: '1px solid rgba(120,180,255,0.4)',
+            borderRadius: 4, padding: '1px 6px', color: '#93c5fd', fontWeight: 600,
+          }}>
+            🌙 Night frost active — movement costs ↑
+          </span>
+        )}
       </div>
     </div>
   );
@@ -286,6 +362,7 @@ function roverStateColor(state: string): string {
     case 'stuck':     return '#ef4444';
     case 'comm_lost': return '#f97316';
     case 'error':     return '#dc2626';
+    case 'safe_mode': return '#06b6d4';  // cyan — standby / waiting for ground contact
     default:          return '#6b7280';
   }
 }

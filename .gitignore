@@ -53,6 +53,12 @@ Desktop.ini
 *.swo
 *~
 
+# Claude Code (local settings and temporary worktrees are machine-specific)
+# .claude/settings.json is intentionally NOT listed so shared project
+# permissions can be committed if the team chooses to.
+.claude/settings.local.json
+.claude/worktrees/
+
 # Generated
 openapi.json
 backend/.venv/

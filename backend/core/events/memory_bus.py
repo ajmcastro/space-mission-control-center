@@ -7,8 +7,18 @@ from .types import MissionEvent
 
 
 class InMemoryEventBus(EventBus):
+    """
+    Pub-sub in-memory bus.
+
+    Each call to `subscribe()` creates an independent queue so that multiple
+    consumers of the same stream all receive every event (broadcast semantics).
+    This matches Redis Streams consumer-group behaviour where each unique
+    group name gets a full copy of the stream.
+    """
+
     def __init__(self) -> None:
-        self._queues: dict[str, asyncio.Queue[MissionEvent]] = defaultdict(asyncio.Queue)
+        # stream → list of per-subscriber queues (broadcast fan-out)
+        self._queues: dict[str, list[asyncio.Queue[MissionEvent]]] = defaultdict(list)
         self._history: dict[str, list[MissionEvent]] = defaultdict(list)
 
     async def connect(self) -> None:
@@ -19,8 +29,9 @@ class InMemoryEventBus(EventBus):
 
     async def publish(self, event: MissionEvent) -> None:
         self._history[event.stream].append(event)
-        queue = self._queues[event.stream]
-        await queue.put(event)
+        # Fan-out: deliver to every active subscriber.
+        for queue in list(self._queues[event.stream]):
+            await queue.put(event)
 
     async def subscribe(
         self,
@@ -29,13 +40,21 @@ class InMemoryEventBus(EventBus):
         consumer: str = "default",
         last_id: str = "0",
     ) -> AsyncIterator[MissionEvent]:
-        queue = self._queues[stream]
-        while True:
+        queue: asyncio.Queue[MissionEvent] = asyncio.Queue()
+        self._queues[stream].append(queue)
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    yield event
+                except asyncio.TimeoutError:
+                    continue
+        finally:
+            # Clean up when the consumer exits or is cancelled.
             try:
-                event = await asyncio.wait_for(queue.get(), timeout=30.0)
-                yield event
-            except asyncio.TimeoutError:
-                continue
+                self._queues[stream].remove(queue)
+            except ValueError:
+                pass
 
     def get_history(self, stream: str) -> list[MissionEvent]:
         return list(self._history[stream])

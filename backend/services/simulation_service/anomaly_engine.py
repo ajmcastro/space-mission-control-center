@@ -23,8 +23,8 @@ class AnomalyEngine:
     def check(self, rover: Rover, command: Command, env: Environment) -> Anomaly | None:
         cell = env.grid.get_cell(rover.x, rover.y)
 
-        # Geyser proximity check
-        if cell and cell.terrain == TerrainType.GEYSER:
+        # Geyser proximity check — dormant geysers are safe (no anomaly)
+        if cell and cell.terrain == TerrainType.GEYSER and cell.geyser_active:
             if random.random() < self._geyser_hazard_prob:
                 return self._make(
                     rover, AnomalyType.GEYSER_PROXIMITY, AnomalySeverity.HIGH,

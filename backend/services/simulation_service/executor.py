@@ -6,7 +6,7 @@ from core.models.rover import Rover, RoverState
 from core.models.command import Command, CommandType, CommandStatus
 from core.models.telemetry import TelemetryEvent, TelemetryType
 from core.models.anomaly import Anomaly, AnomalyResolution
-from core.models.environment import Environment
+from core.models.environment import Environment, TerrainType
 from core.events import EventBus, MissionEvent, EventType
 from core.config import settings
 from core.repositories import TelemetryRepository, RoverRepository
@@ -59,8 +59,16 @@ class CommandExecutor:
         except Exception as exc:
             command.mark_failed(str(exc))
 
+        _CMD_TELEM_TYPE: dict[CommandType, TelemetryType] = {
+            CommandType.MOVE:           TelemetryType.POSITION,
+            CommandType.COLLECT_SAMPLE: TelemetryType.SAMPLE_COLLECTED,
+            CommandType.CHARGE:         TelemetryType.STATE_CHANGE,
+            CommandType.WAIT:           TelemetryType.HEARTBEAT,
+            CommandType.TRANSMIT:       TelemetryType.COMMAND_ACK,
+            CommandType.ABORT:          TelemetryType.STATE_CHANGE,
+        }
         telem = TelemetryEvent(
-            type=TelemetryType.POSITION,
+            type=_CMD_TELEM_TYPE.get(command.type, TelemetryType.POSITION),
             mission_id=command.mission_id,
             rover_id=rover.id,
             x=rover.x,
@@ -88,6 +96,9 @@ class CommandExecutor:
         if not cell or not cell.passable:
             raise ValueError(f"Target ({tx},{ty}) is impassable")
         cost = rover.spec.move_cost_per_cell * cell.movement_cost
+        # Surface frost (V4) — night increases battery drain on flat/ice terrain.
+        if env.is_night and cell.terrain in (TerrainType.FLAT, TerrainType.ICE):
+            cost *= settings.terrain_frost_cost_factor
         if rover.battery < cost:
             raise ValueError("Insufficient battery for move")
         rover.state = RoverState.MOVING

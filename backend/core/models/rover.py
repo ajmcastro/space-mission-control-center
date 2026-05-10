@@ -12,6 +12,7 @@ class RoverState(str, Enum):
     STUCK = "stuck"
     COMM_LOST = "comm_lost"
     ERROR = "error"
+    SAFE_MODE = "safe_mode"
 
 
 class RoverSpec(BaseModel):
@@ -40,6 +41,10 @@ class Rover(BaseModel):
     anomalies_encountered: int = 0
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+    # Fault Protection System (V4)
+    anomaly_streak: int = 0           # consecutive anomaly hits without a clean step
+    safe_mode_reason: str | None = None
+
     @property
     def position(self) -> tuple[int, int]:
         return (self.x, self.y)
@@ -51,7 +56,10 @@ class Rover(BaseModel):
 
     @property
     def is_operational(self) -> bool:
-        return self.state not in (RoverState.STUCK, RoverState.ERROR, RoverState.COMM_LOST)
+        return self.state not in (
+            RoverState.STUCK, RoverState.ERROR,
+            RoverState.COMM_LOST, RoverState.SAFE_MODE,
+        )
 
     def move_to(self, x: int, y: int, cost: float) -> None:
         self.path_history.append((self.x, self.y))

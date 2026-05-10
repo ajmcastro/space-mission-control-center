@@ -32,6 +32,21 @@ class EventType(str, Enum):
     ANOMALY_RESOLVED = "anomaly.resolved"
     REPLAN_TRIGGERED = "replan.triggered"
 
+    # Fog of War (V4)
+    CELLS_REVEALED = "cells.revealed"
+
+    # Fault Protection System (V4)
+    FPS_RULE_TRIGGERED = "fps.rule_triggered"
+    SAFE_MODE_ENTERED  = "fps.safe_mode_entered"
+    SAFE_MODE_EXITED   = "fps.safe_mode_exited"
+
+    # Dynamic Terrain Events (V4)
+    GEYSER_ERUPTION   = "terrain.geyser_eruption"
+    GEYSER_DORMANCY   = "terrain.geyser_dormancy"
+    ICE_FRACTURE      = "terrain.ice_fracture"
+    FROST_CYCLE_START = "terrain.frost_cycle_start"
+    FROST_CYCLE_END   = "terrain.frost_cycle_end"
+
 
 class MissionEvent(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))

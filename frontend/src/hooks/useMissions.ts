@@ -28,7 +28,7 @@ export function useMissionEnvironment(missionId: string) {
     queryKey: envKey(missionId),
     queryFn: () => missionsApi.getEnvironment(missionId),
     enabled: !!missionId,
-    staleTime: Infinity, // environment is static per mission
+    refetchInterval: 2000,   // poll for fog-of-war cell reveals during execution
   });
 }
 

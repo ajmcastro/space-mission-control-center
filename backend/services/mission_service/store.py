@@ -2,6 +2,7 @@
 import math
 import random
 from core.models.environment import Environment, Grid, Cell, TerrainType
+from core.config import settings
 
 # Elevation bias per terrain type — ensures physical consistency.
 _TERRAIN_ELEVATION_BIAS: dict[TerrainType, float] = {
@@ -69,7 +70,11 @@ def generate_env(env_id: str, width: int = 20, height: int = 20) -> Environment:
             bias = _TERRAIN_ELEVATION_BIAS[terrain]
             elevation = max(-1.0, min(1.0, base_elev + bias * 0.5))
 
-            cell = Cell(x=x, y=y, terrain=terrain, elevation=elevation, has_sample=has_sample)
+            # Cells are hidden until a rover enters sensor range (fog of war).
+            # When fog_of_war is disabled every cell starts revealed.
+            revealed = not settings.fog_of_war
+            cell = Cell(x=x, y=y, terrain=terrain, elevation=elevation,
+                        has_sample=has_sample, revealed=revealed)
             row.append(cell)
             if terrain == TerrainType.GEYSER:
                 geysers.append((x, y))
@@ -77,7 +82,8 @@ def generate_env(env_id: str, width: int = 20, height: int = 20) -> Environment:
         cells.append(row)
 
     # Ensure start position (0, 0) is always passable flat at ground level.
-    cells[0][0] = Cell(x=0, y=0, terrain=TerrainType.FLAT, elevation=0.0)
+    cells[0][0] = Cell(x=0, y=0, terrain=TerrainType.FLAT, elevation=0.0,
+                       revealed=not settings.fog_of_war)
 
     grid = Grid(width=width, height=height, cells=cells)
     return Environment(

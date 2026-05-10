@@ -3,6 +3,9 @@
 .gitignore
 .github/
 
+# Claude Code (dev tool — not needed in image)
+.claude/
+
 # Python virtualenv and caches
 .venv/
 __pycache__/

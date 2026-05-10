@@ -172,16 +172,24 @@ All V1, V2, and V3 features are shipped. The system runs as a single FastAPI pro
 
 ### What is in production
 - **Persistence** — SQLAlchemy async ORM + Alembic migrations (`core/db_models/`, `core/repositories/`)
-- **Event bus** — `InMemoryEventBus` by default; `USE_REDIS=true` activates `RedisStreamBus`
+- **Event bus** — `InMemoryEventBus` by default; `USE_REDIS=true` activates `RedisStreamBus`; broadcast pub-sub: each `subscribe()` call gets its own independent queue so multiple concurrent consumers (WebSocket forwarder, DB persist listener) all receive every event without stealing from each other
 - **Planning** — A* (`astar.py`), greedy RL value-function (`rl_planner.py`), multi-agent objective distribution (`multi_agent_planner.py`)
 - **Physics** — elevation map per environment, slope-adjusted movement cost, temperature-aware anomaly probability
 - **Explainability** — structured logs + Claude API streaming SSE (`ANTHROPIC_API_KEY` optional)
-- **Frontend tabs** — Map (2D SVG) · Telemetry · Charts · Timeline · Explain (Claude) · 3D (React Three Fiber) · Anomalies (full history, sort + filter)
+- **Frontend tabs** — Map (2D SVG) · Telemetry (filter by rover/type, paginated 50/page, up to 2 000 events, colour-coded event badges) · Charts · Timeline · Explain (command-type filter, 30-step pagination, battery cost column, non-MOVE step highlighting, Claude SSE analysis) · 3D (React Three Fiber) · Anomalies (full history, sort + filter)
 
 ### V1 constraints still in force
 - All 5 services run in **one FastAPI process**. Do not split into microservices without discussion.
 - SQLite is the default `DATABASE_URL`. PostgreSQL is activated by env var.
 - The event bus abstraction must be preserved — never call between services directly.
+
+### V4 (in progress)
+- **Fog of War** — `Cell.revealed` field; `Grid.reveal_around()` reveals cells in a Chebyshev radius; simulation service reveals cells on spawn and after every move; `CELLS_REVEALED` event published on the bus; frontend polls environment every 2s; 2D and 3D maps render fogged cells as uniform dark blocks; objectives visible as uncharted markers in fog; `FOG_OF_WAR=false` disables globally
+- **Fault Protection System** — `FaultProtectionEngine` in `services/simulation_service/fault_protection.py`; called after every anomaly in `_run_plan_loop`; decision table maps anomaly type + streak to CONTINUE / RETRY / REVERSE / REPLAN / SAFE_MODE; `RoverState.SAFE_MODE` added (cyan in UI); safe-mode reason shown in rover panel; anomaly resolution endpoint exits safe mode and resets rover to IDLE; configurable via `FPS_*` env vars
+- **Dynamic Terrain Events** — `TerrainEventEngine` in `services/simulation_service/terrain_events.py`; called every sim step; geyser eruption/dormancy cycles (`TERRAIN_GEYSER_*`); ice fracture propagation (`TERRAIN_FRACTURE_PROB_PER_TICK`); Enceladus day/night frost cycle (`TERRAIN_FROST_*`); `Cell.geyser_active` field; `Environment.sim_tick` and `Environment.is_night`; FPS auto-replans on path-blocking terrain changes; 2D/3D maps show dormant geyser colour, frost overlay, and day/night status bar
+- **Telemetry richness** — executor emits correct `TelemetryType` per command type (POSITION / SAMPLE_COLLECTED / STATE_CHANGE / HEARTBEAT / COMMAND_ACK); `_event_persist_listener` in `main.py` subscribes to all three bus streams (telemetry, anomaly, mission) and persists anomaly, FPS, terrain, and lifecycle events to the DB so they appear in the Telemetry tab alongside position rows; skips noisy TELEMETRY_EMITTED / CELLS_REVEALED / ROVER_MOVED events
+- **Explain tab & Claude context** — `_build_llm_context()` enriched: full step sequence (MOVE runs compressed, non-MOVE steps with target/cost/rationale), objectives with completion status, command-type breakdown, night-cycle state; system prompt updated for bullet-point analysis; Explain tab UI: command-type filter, 30-step pagination, battery cost column, non-MOVE step highlighting
+- **Objective completion bug fix** — terrain-replan block in `_run_plan_loop` was missing `continue`, causing `idx += 1` to skip `pending[0]` after every terrain replan (manifested as `return_to_base` not being marked when the new plan had only one step); added `continue`; also added post-loop final objective check as a safety net
 
 ### Possible future work
 - Trained neural policy for `RLPlanner` (swap `_value()` — no other changes needed).

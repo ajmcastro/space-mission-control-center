@@ -121,19 +121,26 @@ async def resolve_anomaly(
     if not anomaly:
         raise HTTPException(404, f"Anomaly {anomaly_id} not found")
 
-    # Dismissing a comm_loss restores the rover to IDLE so the operator can re-run the plan
-    if anomaly.type == AnomalyType.COMM_LOSS:
-        rover = await _rover_repo.get(session, anomaly.rover_id)
-        if rover and rover.state == RoverState.COMM_LOST:
+    rover = await _rover_repo.get(session, anomaly.rover_id)
+    if rover:
+        # Dismissing a comm_loss restores the rover to IDLE so the operator can re-run the plan.
+        if anomaly.type == AnomalyType.COMM_LOSS and rover.state == RoverState.COMM_LOST:
             rover.state = RoverState.IDLE
+            rover.anomaly_streak = 0
             await _rover_repo.save(session, rover)
 
-    # Dismissing a low_battery triggers an emergency recharge to full capacity
-    if anomaly.type == AnomalyType.LOW_BATTERY:
-        rover = await _rover_repo.get(session, anomaly.rover_id)
-        if rover:
+        # Dismissing a low_battery triggers an emergency recharge to full capacity.
+        elif anomaly.type == AnomalyType.LOW_BATTERY:
             rover.battery = rover.spec.max_battery
             rover.state = RoverState.IDLE
+            rover.anomaly_streak = 0
+            await _rover_repo.save(session, rover)
+
+        # Exiting safe mode — reset FPS state so the operator can re-run the plan.
+        elif rover.state == RoverState.SAFE_MODE:
+            rover.state = RoverState.IDLE
+            rover.anomaly_streak = 0
+            rover.safe_mode_reason = None
             await _rover_repo.save(session, rover)
 
     await session.commit()

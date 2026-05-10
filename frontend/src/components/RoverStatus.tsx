@@ -4,7 +4,8 @@ interface Props { rover: Rover }
 
 const STATE_COLORS: Record<string, string> = {
   idle: '#22c55e', moving: '#3b82f6', sampling: '#f59e0b',
-  charging: '#a855f7', stuck: '#ef4444', comm_lost: '#f97316', error: '#dc2626',
+  charging: '#a855f7', stuck: '#ef4444', comm_lost: '#f97316',
+  error: '#dc2626', safe_mode: '#06b6d4',
 };
 
 export function RoverStatus({ rover }: Props) {
@@ -31,6 +32,19 @@ export function RoverStatus({ rover }: Props) {
           {rover.state.replace('_', ' ')}
         </span>
       </div>
+
+      {rover.state === 'safe_mode' && rover.safe_mode_reason && (
+        <div style={{
+          background: '#06b6d422', border: '1px solid #06b6d455',
+          borderRadius: 5, padding: '5px 8px', marginBottom: 8,
+          fontSize: 11, color: '#06b6d4',
+        }}>
+          🛡 Safe mode: {rover.safe_mode_reason}
+          <div style={{ color: '#94a3b8', fontSize: 10, marginTop: 2 }}>
+            Resolve the anomaly to restore operations
+          </div>
+        </div>
+      )}
 
       <Row label="Position" value={`(${rover.x}, ${rover.y})`} />
       <Row label="Steps"    value={rover.steps_taken.toString()} />

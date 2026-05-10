@@ -65,7 +65,7 @@ function RoverPanel({
   runPending: boolean;
 }) {
   const [selectedPlanner, setSelectedPlanner] = useState<'astar' | 'rl'>('astar');
-  const isExecuting = ['moving', 'sampling', 'stuck'].includes(rover.state);
+  const isExecuting = ['moving', 'sampling', 'stuck', 'safe_mode'].includes(rover.state);
   const canPlan = missionStatus === 'active' && !isExecuting;
   const canRun  = missionStatus === 'active' && !!plan && !isExecuting;
 
@@ -150,6 +150,160 @@ const RESOLUTION_LABELS: Record<string, string> = {
   pending: 'Pending', auto_recovered: 'Auto-recovered',
   replanned: 'Replanned', aborted: 'Aborted', ignored: 'Dismissed',
 };
+
+// ─── Telemetry tab ────────────────────────────────────────────────────────────
+
+const EVENT_TYPE_COLORS: Record<string, string> = {
+  position:         '#38bdf8',
+  battery:          '#fbbf24',
+  state_change:     '#a78bfa',
+  sample_collected: '#34d399',
+  command_ack:      '#94a3b8',
+  heartbeat:        '#475569',
+  anomaly_detected: '#f87171',
+  mission_event:    '#fb923c',
+};
+
+const PAGE_SIZE = 50;
+
+function TelemetryTab({ events, rovers }: {
+  events: import('@/types').TelemetryEvent[];
+  rovers: import('@/types').Rover[];
+}) {
+  const [filterRover, setFilterRover]   = useState('all');
+  const [filterType,  setFilterType]    = useState('all');
+  const [page,        setPage]          = useState(0);
+
+  const allTypes = Array.from(new Set(events.map(e => e.type))).sort();
+
+  const filtered = events
+    .filter(e => filterRover === 'all' || e.rover_id === filterRover)
+    .filter(e => filterType  === 'all' || e.type     === filterType)
+    .slice()
+    .reverse();   // newest first
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage   = Math.min(page, totalPages - 1);
+  const pageItems  = filtered.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
+
+  const roverName = (id: string) => rovers.find(r => r.id === id)?.name ?? id.slice(0, 8);
+
+  const ctrlStyle: React.CSSProperties = {
+    background: 'var(--bg)', border: '1px solid var(--border)',
+    borderRadius: 5, color: 'var(--text)', fontSize: 11,
+    padding: '3px 7px', fontFamily: 'inherit', cursor: 'pointer',
+  };
+
+  return (
+    <div>
+      {/* Controls */}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Rover</span>
+        <select value={filterRover} onChange={e => { setFilterRover(e.target.value); setPage(0); }} style={ctrlStyle}>
+          <option value="all">All rovers</option>
+          {rovers.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+        </select>
+
+        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Type</span>
+        <select value={filterType} onChange={e => { setFilterType(e.target.value); setPage(0); }} style={ctrlStyle}>
+          <option value="all">All types</option>
+          {allTypes.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
+
+        {(filterRover !== 'all' || filterType !== 'all') && (
+          <button onClick={() => { setFilterRover('all'); setFilterType('all'); setPage(0); }}
+            style={{ ...ctrlStyle, color: 'var(--accent)', borderColor: 'var(--accent)' }}>
+            Clear filters
+          </button>
+        )}
+
+        <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-muted)' }}>
+          {filtered.length === 0 ? 'No entries' : `${filtered.length} entries`}
+        </span>
+      </div>
+
+      {/* Table */}
+      {pageItems.length === 0 ? (
+        <p style={{ color: 'var(--text-muted)', fontSize: 12 }}>No events match the current filters.</p>
+      ) : (
+        <div style={{ fontFamily: 'monospace', fontSize: 11 }}>
+          {/* Header */}
+          <div style={{
+            display: 'grid', gridTemplateColumns: '80px 90px 120px 60px 70px 1fr',
+            gap: 8, padding: '4px 0', borderBottom: '1px solid var(--border)',
+            color: 'var(--text-muted)', fontSize: 10, fontWeight: 700,
+            textTransform: 'uppercase', letterSpacing: '0.05em',
+          }}>
+            <span>Time</span>
+            <span>Rover</span>
+            <span>Type</span>
+            <span>Pos</span>
+            <span>Battery</span>
+            <span>Payload</span>
+          </div>
+
+          {pageItems.map(ev => {
+            const typeColor = EVENT_TYPE_COLORS[ev.type] ?? '#94a3b8';
+            const payloadStr = Object.keys(ev.payload ?? {}).length > 0
+              ? Object.entries(ev.payload)
+                  .filter(([k]) => !['command_id', 'command_type'].includes(k))
+                  .map(([k, v]) => `${k}=${String(v).slice(0, 30)}`)
+                  .join('  ')
+              : '';
+
+            return (
+              <div key={ev.id} style={{
+                display: 'grid', gridTemplateColumns: '80px 90px 120px 60px 70px 1fr',
+                gap: 8, padding: '3px 0',
+                borderBottom: '1px solid var(--surface)',
+                color: 'var(--text-sec)',
+                alignItems: 'center',
+              }}>
+                <span style={{ color: 'var(--text-muted)' }}>
+                  {new Date(ev.timestamp).toLocaleTimeString()}
+                </span>
+                <span style={{ color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {roverName(ev.rover_id)}
+                </span>
+                <span style={{
+                  background: typeColor + '1a', color: typeColor,
+                  borderRadius: 3, padding: '0 4px', whiteSpace: 'nowrap',
+                  overflow: 'hidden', textOverflow: 'ellipsis',
+                }}>
+                  {ev.type}
+                </span>
+                <span style={{ color: 'var(--text-muted)' }}>
+                  {ev.x != null ? `(${ev.x},${ev.y})` : '—'}
+                </span>
+                <span style={{ color: ev.battery_pct != null && ev.battery_pct < 20 ? 'var(--accent-red)' : 'var(--accent-green)' }}>
+                  {ev.battery_pct != null ? `🔋${ev.battery_pct.toFixed(1)}%` : '—'}
+                </span>
+                <span style={{ color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {payloadStr}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12, justifyContent: 'center' }}>
+          <button onClick={() => setPage(0)} disabled={safePage === 0} style={{ ...ctrlStyle, opacity: safePage === 0 ? 0.4 : 1 }}>«</button>
+          <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={safePage === 0} style={{ ...ctrlStyle, opacity: safePage === 0 ? 0.4 : 1 }}>‹ Prev</button>
+          <span style={{ fontSize: 11, color: 'var(--text-muted)', minWidth: 80, textAlign: 'center' }}>
+            Page {safePage + 1} / {totalPages}
+          </span>
+          <button onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={safePage >= totalPages - 1} style={{ ...ctrlStyle, opacity: safePage >= totalPages - 1 ? 0.4 : 1 }}>Next ›</button>
+          <button onClick={() => setPage(totalPages - 1)} disabled={safePage >= totalPages - 1} style={{ ...ctrlStyle, opacity: safePage >= totalPages - 1 ? 0.4 : 1 }}>»</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Anomalies tab ────────────────────────────────────────────────────────────
 
 function AnomaliesTab({ anomalies, onResolve, onDismissAll, dismissAllPending }: {
   anomalies: import('@/types').Anomaly[];
@@ -316,7 +470,7 @@ export function MissionView() {
   });
   const { data: telemetryEvents = [] } = useQuery({
     queryKey: ['telemetry', missionId],
-    queryFn: () => telemetryApi.getEvents(missionId, 200),
+    queryFn: () => telemetryApi.getEvents(missionId, 2000),
     refetchInterval: 2000,
     enabled: !!missionId,
   });
@@ -336,7 +490,8 @@ export function MissionView() {
 
   const [roverName, setRoverName]           = useState('');
   const [activeTab, setActiveTab]           = useState<'map' | 'telemetry' | 'charts' | 'timeline' | 'explain' | '3d' | 'anomalies'>('map');
-  const [showAllSteps, setShowAllSteps]     = useState(false);
+  const [explainTypeFilter, setExplainTypeFilter] = useState<string>('all');
+  const [explainPage, setExplainPage]             = useState(1);
   const [editing, setEditing]               = useState(false);
   const [editName, setEditName]             = useState('');
   const [editDesc, setEditDesc]             = useState('');
@@ -395,9 +550,18 @@ export function MissionView() {
     .flatMap(p => p.waypoints as [number, number][]);
   const targetCells: [number, number][] = mission.objectives.map(o => [o.target_x, o.target_y]);
 
-  const displayedSteps = showAllSteps
-    ? (explainPlan?.steps ?? [])
-    : (explainPlan?.steps ?? []).slice(0, 30);
+  const EXPLAIN_PAGE_SIZE = 30;
+  const allPlanSteps = explainPlan?.steps ?? [];
+  const filteredPlanSteps = explainTypeFilter === 'all'
+    ? allPlanSteps
+    : allPlanSteps.filter(s => s.command.type === explainTypeFilter);
+  const explainPageCount  = Math.max(1, Math.ceil(filteredPlanSteps.length / EXPLAIN_PAGE_SIZE));
+  const explainPageSafe   = Math.min(explainPage, explainPageCount);
+  const displayedSteps    = filteredPlanSteps.slice(
+    (explainPageSafe - 1) * EXPLAIN_PAGE_SIZE,
+    explainPageSafe * EXPLAIN_PAGE_SIZE,
+  );
+  const explainCommandTypes = Array.from(new Set(allPlanSteps.map(s => s.command.type))).sort();
 
   function startEdit() {
     setEditName(mission!.name);
@@ -660,13 +824,31 @@ export function MissionView() {
           {activeTab === 'map' && (
             <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 10, padding: 16 }}>
               {env ? (
-                <GridMap
-                  environment={env}
-                  rovers={rovers}
-                  highlightPath={allWaypoints}
-                  targetCells={targetCells}
-                  cellSize={26}
-                />
+                <>
+                  {/* Dynamic terrain status bar */}
+                  <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 10, fontSize: 11, color: 'var(--text-muted)' }}>
+                    <span>Tick <span style={{ color: 'var(--text)', fontWeight: 600, fontFamily: 'monospace' }}>{env.sim_tick}</span></span>
+                    <span style={{
+                      display: 'flex', alignItems: 'center', gap: 4,
+                      color: env.is_night ? '#93c5fd' : '#fbbf24',
+                      fontWeight: 600,
+                    }}>
+                      {env.is_night ? '🌙 Night' : '☀️ Day'}
+                    </span>
+                    {env.is_night && (
+                      <span style={{ color: '#93c5fd', fontSize: 10 }}>
+                        Surface frost active — flat/ice movement costs ↑
+                      </span>
+                    )}
+                  </div>
+                  <GridMap
+                    environment={env}
+                    rovers={rovers}
+                    highlightPath={allWaypoints}
+                    targetCells={targetCells}
+                    cellSize={26}
+                  />
+                </>
               ) : (
                 <p style={{ color: 'var(--text-muted)', fontSize: 12, margin: 0 }}>Loading terrain map…</p>
               )}
@@ -675,39 +857,13 @@ export function MissionView() {
 
           {activeTab === 'telemetry' && (
             <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 10, padding: 16 }}>
-              <h3 style={{ fontSize: 13, color: 'var(--text-sec)', marginTop: 0 }}>Telemetry Stream</h3>
-              {rovers.length === 0 && <p style={{ color: 'var(--text-muted)', fontSize: 12 }}>No rovers deployed.</p>}
-              {rovers.length > 0 && telemetryEvents.length === 0 && (
-                <p style={{ color: 'var(--text-muted)', fontSize: 12 }}>No telemetry yet — execute a plan to start streaming.</p>
-              )}
-              {rovers.map(r => {
-                const events = telemetryEvents.filter(e => e.rover_id === r.id).slice(-20).reverse();
-                if (events.length === 0) return null;
-                return (
-                  <div key={r.id} style={{ marginBottom: 16 }}>
-                    <div style={{ fontSize: 12, color: 'var(--accent)', marginBottom: 6, fontWeight: 600 }}>{r.name}</div>
-                    <div style={{ fontFamily: 'monospace', fontSize: 11 }}>
-                      {events.map(ev => (
-                        <div key={ev.id} style={{
-                          display: 'flex', gap: 10, padding: '3px 0',
-                          borderBottom: '1px solid var(--surface)', color: 'var(--text-sec)',
-                        }}>
-                          <span style={{ color: 'var(--text-muted)', minWidth: 80 }}>
-                            {new Date(ev.timestamp).toLocaleTimeString()}
-                          </span>
-                          <span style={{ color: 'var(--accent)' }}>{ev.type}</span>
-                          {ev.x != null && <span>({ev.x},{ev.y})</span>}
-                          {ev.battery_pct != null && (
-                            <span style={{ color: ev.battery_pct < 20 ? 'var(--accent-red)' : 'var(--accent-green)' }}>
-                              🔋{ev.battery_pct.toFixed(1)}%
-                            </span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
+              <h3 style={{ fontSize: 13, color: 'var(--text-sec)', marginTop: 0, marginBottom: 12 }}>Telemetry Stream</h3>
+              {rovers.length === 0
+                ? <p style={{ color: 'var(--text-muted)', fontSize: 12 }}>No rovers deployed.</p>
+                : telemetryEvents.length === 0
+                  ? <p style={{ color: 'var(--text-muted)', fontSize: 12 }}>No telemetry yet — execute a plan to start streaming.</p>
+                  : <TelemetryTab events={telemetryEvents} rovers={rovers} />
+              }
             </div>
           )}
 
@@ -757,12 +913,13 @@ export function MissionView() {
 
           {activeTab === 'explain' && (
             <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 10, padding: 16 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+              {/* ── Header row ── */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
                 <h3 style={{ fontSize: 13, color: 'var(--text-sec)', margin: 0 }}>Plan Explanation</h3>
                 {rovers.length > 1 && (
                   <select
                     value={explainRoverId ?? rovers[0]?.id ?? ''}
-                    onChange={e => setExplainRoverId(e.target.value)}
+                    onChange={e => { setExplainRoverId(e.target.value); setExplainPage(1); setExplainTypeFilter('all'); }}
                     style={{
                       background: 'var(--surface)', border: '1px solid var(--border)',
                       borderRadius: 5, color: 'var(--text)', fontSize: 11,
@@ -781,39 +938,136 @@ export function MissionView() {
                 </p>
               ) : (
                 <>
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
+                  {/* ── Plan meta ── */}
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 10 }}>
                     Planner: <span style={{ color: 'var(--accent)' }}>{explainPlan.planner}</span> ·{' '}
                     Steps: <span style={{ color: 'var(--text)' }}>{explainPlan.total_commands}</span> ·{' '}
                     Est. battery: <span style={{ color: 'var(--accent-amber)' }}>{explainPlan.estimated_total_battery.toFixed(1)}</span>
                   </div>
-                  <div style={{ fontFamily: 'monospace', fontSize: 11 }}>
-                    {displayedSteps.map((step, i) => (
-                      <div key={i} style={{
-                        display: 'flex', gap: 10, padding: '3px 0',
-                        borderBottom: '1px solid var(--surface)', color: 'var(--text-sec)',
-                      }}>
-                        <span style={{ color: 'var(--text-muted)', minWidth: 24 }}>#{step.sequence}</span>
-                        <span style={{ color: 'var(--accent)', minWidth: 80 }}>{step.command.type}</span>
-                        {step.command.target_x != null && (
-                          <span>→ ({step.command.target_x},{step.command.target_y})</span>
-                        )}
-                        <span style={{ color: 'var(--text-muted)' }}>{step.rationale}</span>
-                      </div>
-                    ))}
-                  </div>
-                  {explainPlan.steps.length > 30 && (
-                    <button
-                      onClick={() => setShowAllSteps(s => !s)}
+
+                  {/* ── Filter + count row ── */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Type:</span>
+                    <select
+                      value={explainTypeFilter}
+                      onChange={e => { setExplainTypeFilter(e.target.value); setExplainPage(1); }}
                       style={{
-                        marginTop: 10, background: 'none', border: '1px solid var(--border)',
-                        borderRadius: 6, color: 'var(--accent)', cursor: 'pointer',
-                        fontSize: 11, padding: '4px 12px', fontFamily: 'inherit',
+                        background: 'var(--surface)', border: '1px solid var(--border)',
+                        borderRadius: 5, color: 'var(--text)', fontSize: 11,
+                        padding: '3px 8px', fontFamily: 'inherit', cursor: 'pointer',
                       }}
                     >
-                      {showAllSteps
-                        ? 'Show fewer steps'
-                        : `Show all ${explainPlan.steps.length} steps (${explainPlan.steps.length - 30} more)`}
-                    </button>
+                      <option value="all">All types</option>
+                      {explainCommandTypes.map(t => (
+                        <option key={t} value={t}>{t}</option>
+                      ))}
+                    </select>
+                    {explainTypeFilter !== 'all' && (
+                      <button
+                        onClick={() => { setExplainTypeFilter('all'); setExplainPage(1); }}
+                        style={{
+                          background: 'none', border: '1px solid var(--border)', borderRadius: 5,
+                          color: 'var(--text-muted)', fontSize: 11, padding: '3px 8px',
+                          cursor: 'pointer', fontFamily: 'inherit',
+                        }}
+                      >
+                        Clear
+                      </button>
+                    )}
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 'auto' }}>
+                      {filteredPlanSteps.length} step{filteredPlanSteps.length !== 1 ? 's' : ''}
+                      {explainTypeFilter !== 'all' && ` (filtered from ${allPlanSteps.length})`}
+                    </span>
+                  </div>
+
+                  {/* ── Step list ── */}
+                  <div style={{ fontFamily: 'monospace', fontSize: 11 }}>
+                    {displayedSteps.map((step) => {
+                      const isMajor = step.command.type !== 'move';
+                      return (
+                        <div key={step.sequence} style={{
+                          display: 'grid',
+                          gridTemplateColumns: '28px 110px 100px 70px 1fr',
+                          gap: 8,
+                          padding: '4px 0',
+                          borderBottom: '1px solid var(--surface)',
+                          color: isMajor ? 'var(--text)' : 'var(--text-sec)',
+                          background: isMajor ? 'var(--surface)' : 'transparent',
+                          borderRadius: isMajor ? 4 : 0,
+                          paddingLeft: isMajor ? 6 : 0,
+                        }}>
+                          <span style={{ color: 'var(--text-muted)' }}>#{step.sequence}</span>
+                          <span style={{ color: isMajor ? 'var(--accent-amber)' : 'var(--accent)' }}>
+                            {step.command.type}
+                          </span>
+                          <span>
+                            {step.command.target_x != null
+                              ? `→ (${step.command.target_x},${step.command.target_y})`
+                              : ''}
+                          </span>
+                          <span style={{ color: 'var(--text-muted)', textAlign: 'right' }}>
+                            {step.estimated_battery_cost > 0
+                              ? `${step.estimated_battery_cost.toFixed(1)}W`
+                              : ''}
+                          </span>
+                          <span style={{ color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {step.rationale}
+                          </span>
+                        </div>
+                      );
+                    })}
+                    {filteredPlanSteps.length === 0 && (
+                      <p style={{ color: 'var(--text-muted)', margin: '8px 0' }}>No steps match the current filter.</p>
+                    )}
+                  </div>
+
+                  {/* ── Pagination ── */}
+                  {explainPageCount > 1 && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 10, fontSize: 11 }}>
+                      <button
+                        onClick={() => setExplainPage(1)}
+                        disabled={explainPageSafe === 1}
+                        style={{
+                          background: 'none', border: '1px solid var(--border)', borderRadius: 5,
+                          color: explainPageSafe === 1 ? 'var(--text-muted)' : 'var(--text)',
+                          padding: '3px 7px', cursor: explainPageSafe === 1 ? 'default' : 'pointer',
+                          fontFamily: 'inherit',
+                        }}
+                      >«</button>
+                      <button
+                        onClick={() => setExplainPage(p => Math.max(1, p - 1))}
+                        disabled={explainPageSafe === 1}
+                        style={{
+                          background: 'none', border: '1px solid var(--border)', borderRadius: 5,
+                          color: explainPageSafe === 1 ? 'var(--text-muted)' : 'var(--text)',
+                          padding: '3px 7px', cursor: explainPageSafe === 1 ? 'default' : 'pointer',
+                          fontFamily: 'inherit',
+                        }}
+                      >‹ Prev</button>
+                      <span style={{ color: 'var(--text-muted)', padding: '0 4px' }}>
+                        Page {explainPageSafe} / {explainPageCount}
+                      </span>
+                      <button
+                        onClick={() => setExplainPage(p => Math.min(explainPageCount, p + 1))}
+                        disabled={explainPageSafe === explainPageCount}
+                        style={{
+                          background: 'none', border: '1px solid var(--border)', borderRadius: 5,
+                          color: explainPageSafe === explainPageCount ? 'var(--text-muted)' : 'var(--text)',
+                          padding: '3px 7px', cursor: explainPageSafe === explainPageCount ? 'default' : 'pointer',
+                          fontFamily: 'inherit',
+                        }}
+                      >Next ›</button>
+                      <button
+                        onClick={() => setExplainPage(explainPageCount)}
+                        disabled={explainPageSafe === explainPageCount}
+                        style={{
+                          background: 'none', border: '1px solid var(--border)', borderRadius: 5,
+                          color: explainPageSafe === explainPageCount ? 'var(--text-muted)' : 'var(--text)',
+                          padding: '3px 7px', cursor: explainPageSafe === explainPageCount ? 'default' : 'pointer',
+                          fontFamily: 'inherit',
+                        }}
+                      >»</button>
+                    </div>
                   )}
 
                   {/* Claude AI explanation */}
