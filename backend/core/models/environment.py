@@ -33,6 +33,9 @@ class Cell(BaseModel):
     # Dynamic terrain (V4) — only meaningful for GEYSER cells
     geyser_active: bool = True      # False = dormant (safe to traverse), True = erupting (hazardous)
 
+    # Science Value Map (V4) — composite score in [0, 10]
+    science_value: float = 0.0
+
     @property
     def passable(self) -> bool:
         return self.terrain != TerrainType.CREVASSE
@@ -107,3 +110,63 @@ class Environment(BaseModel):
     # Dynamic terrain state (V4)
     sim_tick: int = 0                   # simulation steps elapsed since mission start
     is_night: bool = False              # surface frost active during Enceladus night
+
+
+def compute_science_scores(grid: "Grid") -> None:
+    """
+    Compute per-cell science values in-place from three terrain signals:
+
+    Geyser proximity
+        Cells near geyser cells score up to 5.0 on a Chebyshev-distance decay
+        (max at dist=0, zero beyond dist=5).  Geyser cells themselves are the
+        highest-value science targets on Enceladus — potential ocean-surface vents.
+
+    Ice-water interface
+        ICE cells immediately adjacent (Chebyshev dist ≤ 1) to any geyser cell
+        receive a +3.0 bonus — the contact zone between subsurface water and
+        surface ice is an analogue of deep-sea hydrothermal vent biomes.
+
+    Crater proximity
+        CRATER cells score +2.0 (impact-excavated material); cells one step away
+        score +0.75 (ejecta blanket).  Secondary craters concentrate volatiles
+        and expose sub-surface stratigraphy.
+
+    The three components are summed and clamped to [0, 10].
+    """
+    geyser_coords: list[tuple[int, int]] = [
+        (cell.x, cell.y)
+        for row in grid.cells
+        for cell in row
+        if cell.terrain == TerrainType.GEYSER
+    ]
+    crater_coords: list[tuple[int, int]] = [
+        (cell.x, cell.y)
+        for row in grid.cells
+        for cell in row
+        if cell.terrain == TerrainType.CRATER
+    ]
+
+    for row in grid.cells:
+        for cell in row:
+            score = 0.0
+
+            if geyser_coords:
+                min_geyser_dist = min(
+                    max(abs(cell.x - gx), abs(cell.y - gy))
+                    for gx, gy in geyser_coords
+                )
+                score += max(0.0, 5.0 - min_geyser_dist)
+                if cell.terrain == TerrainType.ICE and min_geyser_dist <= 1:
+                    score += 3.0
+
+            if crater_coords:
+                min_crater_dist = min(
+                    max(abs(cell.x - cx), abs(cell.y - cy))
+                    for cx, cy in crater_coords
+                )
+                if min_crater_dist == 0:
+                    score += 2.0
+                elif min_crater_dist == 1:
+                    score += 0.75
+
+            cell.science_value = min(10.0, round(score, 2))

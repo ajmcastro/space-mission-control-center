@@ -3,7 +3,7 @@ import random
 import structlog
 from dataclasses import dataclass, field
 
-from core.models.environment import Environment, Cell, TerrainType
+from core.models.environment import Environment, Cell, TerrainType, compute_science_scores
 from core.events import EventType
 from core.config import settings
 
@@ -138,6 +138,10 @@ class TerrainEventEngine:
                         "tick": env.sim_tick,
                     },
                 ))
+
+        if changes:
+            # Geyser state changes alter proximity-based science values across the grid.
+            compute_science_scores(env.grid)
 
         return changes
 

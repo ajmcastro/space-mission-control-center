@@ -78,6 +78,7 @@ export interface Cell {
   is_visited: boolean;
   revealed: boolean;       // false = fog of war; terrain details hidden until rover enters sensor range
   geyser_active: boolean;  // true = erupting (hazardous); false = dormant (safe, high science value)
+  science_value: number;   // composite science score [0–10]: geyser proximity + ice-water interface + crater proximity
 }
 
 export interface Grid {

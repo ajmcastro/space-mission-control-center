@@ -10,16 +10,24 @@ from core.config import settings
 from .astar import astar
 from .schemas import PlanRequest
 
+_SCIENCE_ROI_EPSILON = 1.0  # prevents division by zero in science ROI metric
+
 log = structlog.get_logger(__name__)
 
 
 class MultiAgentCoordinator:
     """
-    Greedy distance-based objective assignment.
+    Greedy objective assignment — two modes:
 
-    For each objective (sorted by priority), assigns it to the rover
-    with the lowest accumulated travel cost so far.  After assignment,
-    runs A* per rover to build the final plans.
+    Default (optimize_science=False)
+        Assigns each objective to the rover with the lowest accumulated travel
+        cost so far.  Minimises total battery spent across the fleet.
+
+    Science-optimised (optimize_science=True)
+        Assigns each objective to the rover that maximises expected science ROI:
+        ``science_value_at_target / (cumulative_cost + cost_to_objective)``.
+        Rovers converge on high-value targets (geyser vents, ice-water interfaces,
+        craters) rather than nearby ones.
     """
 
     def __init__(self, astar_planner) -> None:  # type: ignore[annotation-unchecked]
@@ -32,6 +40,7 @@ class MultiAgentCoordinator:
         rover_positions: dict[str, tuple[int, int]],
         objectives: list,
         grid: Grid,
+        optimize_science: bool = False,
     ) -> list[Plan]:
         if not rover_ids or not objectives:
             return []
@@ -50,16 +59,28 @@ class MultiAgentCoordinator:
         # Build cost matrix: rover → objective → A* cost (parallelised).
         cost_matrix = await self._build_cost_matrix(rover_ids, rover_positions, pending_objs, grid)
 
-        # Greedy assignment: each objective goes to the rover with lowest
-        # cumulative cost, weighted by priority (lower priority number = higher urgency).
+        # Greedy assignment: each objective (sorted by priority) goes to the rover
+        # that minimises travel cost (default) or maximises science ROI (optimize_science).
         assignments: dict[str, list] = {rid: [] for rid in rover_ids}
         cumulative: dict[str, float] = {rid: 0.0 for rid in rover_ids}
 
         for obj in sorted(pending_objs, key=lambda o: o.priority):
-            best_rover = min(
-                rover_ids,
-                key=lambda rid: cumulative[rid] + cost_matrix.get((rid, obj.id), 1e9),
-            )
+            target_cell = grid.get_cell(obj.target_x, obj.target_y)
+            sci_value = target_cell.science_value if target_cell else 0.0
+
+            if optimize_science:
+                best_rover = max(
+                    rover_ids,
+                    key=lambda rid: sci_value / max(
+                        cumulative[rid] + cost_matrix.get((rid, obj.id), 1e9),
+                        _SCIENCE_ROI_EPSILON,
+                    ),
+                )
+            else:
+                best_rover = min(
+                    rover_ids,
+                    key=lambda rid: cumulative[rid] + cost_matrix.get((rid, obj.id), 1e9),
+                )
             assignments[best_rover].append(obj)
             cumulative[best_rover] += cost_matrix.get((best_rover, obj.id), 0.0)
 
@@ -75,10 +96,18 @@ class MultiAgentCoordinator:
         plans: list[Plan] = await asyncio.gather(*tasks)
 
         # Tag each plan with multi-agent metadata.
+        coordinator_label = "greedy_science_roi" if optimize_science else "greedy_distance"
         for plan, rover_id in zip(plans, rover_ids):
             plan.planner = PlannerType.MULTI_AGENT
             plan.metadata["assigned_objectives"] = [o.id for o in assignments[rover_id]]
-            plan.metadata["coordinator"] = "greedy_distance"
+            plan.metadata["coordinator"] = coordinator_label
+            if optimize_science:
+                sci_total = sum(
+                    (grid.get_cell(o.target_x, o.target_y).science_value
+                     if grid.get_cell(o.target_x, o.target_y) else 0.0)
+                    for o in assignments[rover_id]
+                )
+                plan.metadata["total_science_value"] = round(sci_total, 2)
 
         return plans
 

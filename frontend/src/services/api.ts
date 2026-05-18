@@ -46,7 +46,7 @@ export const planningApi = {
     http.post<Plan>('/planning/auto', payload).then(r => r.data),
   manualPlan: (payload: { mission_id: string; rover_id: string; waypoints: [number, number][] }) =>
     http.post<Plan>('/planning/manual', payload).then(r => r.data),
-  multiAgentPlan: (payload: { mission_id: string; rover_ids: string[] }) =>
+  multiAgentPlan: (payload: { mission_id: string; rover_ids: string[]; optimize_science?: boolean }) =>
     http.post<Plan[]>('/planning/multi-agent', payload).then(r => r.data),
   getPlan: (id: string) => http.get<Plan>(`/planning/${id}`).then(r => r.data),
   getMissionPlan: (missionId: string) =>

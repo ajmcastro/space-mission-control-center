@@ -1,7 +1,7 @@
 """Terrain generation helper — pure function, no in-memory state in V2."""
 import math
 import random
-from core.models.environment import Environment, Grid, Cell, TerrainType
+from core.models.environment import Environment, Grid, Cell, TerrainType, compute_science_scores
 from core.config import settings
 
 # Elevation bias per terrain type — ensures physical consistency.
@@ -86,6 +86,7 @@ def generate_env(env_id: str, width: int = 20, height: int = 20) -> Environment:
                        revealed=not settings.fog_of_war)
 
     grid = Grid(width=width, height=height, cells=cells)
+    compute_science_scores(grid)
     return Environment(
         id=env_id,
         grid=grid,

@@ -20,3 +20,4 @@ class WaypointRequest(BaseModel):
 class MultiAgentPlanRequest(BaseModel):
     mission_id: str
     rover_ids: list[str]
+    optimize_science: bool = False  # maximise science ROI instead of minimising travel cost

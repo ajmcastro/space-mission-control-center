@@ -76,3 +76,15 @@ async def list_mission_plans(
     session: AsyncSession = Depends(get_session),
 ) -> list[Plan]:
     return await svc.list_plans_for_mission(session, mission_id)
+
+
+@router.get("/environments/{environment_id}/science-heatmap")
+async def science_heatmap(
+    environment_id: str,
+    svc: PlanningService = Depends(get_planning_service),
+    session: AsyncSession = Depends(get_session),
+) -> list[dict]:
+    result = await svc.get_science_heatmap(session, environment_id)
+    if result is None:
+        raise HTTPException(404, f"Environment {environment_id} not found")
+    return result

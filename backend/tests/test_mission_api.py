@@ -206,3 +206,82 @@ class TestMultiRover:
         # Running the same plan again raises 409
         run1_dup = await client.post("/api/v1/simulation/run", json={"mission_id": mission_id, "plan_id": plan1_id})
         assert run1_dup.status_code == 409
+
+
+class TestScienceValueMap:
+    """Science Value Map — per-cell scores and optimised multi-agent planning."""
+
+    async def _active_mission_with_rovers(self, client: AsyncClient) -> tuple[str, str, str]:
+        m = await client.post("/api/v1/missions/", json={
+            "name": "Science ROI Test",
+            "objectives": [
+                {"type": "reach_waypoint", "target_x": 3, "target_y": 3, "priority": 1},
+                {"type": "collect_sample",  "target_x": 6, "target_y": 6, "priority": 2},
+            ],
+        })
+        assert m.status_code == 201
+        mission_id = m.json()["id"]
+        await client.post(f"/api/v1/missions/{mission_id}/start")
+
+        r1 = await client.post("/api/v1/simulation/rovers", json={
+            "mission_id": mission_id, "name": "Sci-1", "start_x": 0, "start_y": 0,
+        })
+        r2 = await client.post("/api/v1/simulation/rovers", json={
+            "mission_id": mission_id, "name": "Sci-2", "start_x": 1, "start_y": 0,
+        })
+        return mission_id, r1.json()["id"], r2.json()["id"]
+
+    async def test_environment_cells_have_science_value(self, client: AsyncClient):
+        m = await client.post("/api/v1/missions/", json={"name": "Env Science Test"})
+        mission_id = m.json()["id"]
+        env_r = await client.get(f"/api/v1/missions/{mission_id}/environment")
+        env = env_r.json()
+        # Every cell must carry a science_value field
+        for row in env["grid"]["cells"]:
+            for cell in row:
+                assert "science_value" in cell
+                assert cell["science_value"] >= 0.0
+                assert cell["science_value"] <= 10.0
+
+    async def test_science_heatmap_endpoint(self, client: AsyncClient):
+        m = await client.post("/api/v1/missions/", json={"name": "Heatmap Test"})
+        env_r = await client.get(f"/api/v1/missions/{m.json()['id']}/environment")
+        env_id = env_r.json()["id"]
+
+        heatmap_r = await client.get(f"/api/v1/planning/environments/{env_id}/science-heatmap")
+        assert heatmap_r.status_code == 200
+        entries = heatmap_r.json()
+        assert len(entries) == 20 * 20  # default 20×20 grid
+        for entry in entries:
+            assert "x" in entry and "y" in entry and "science_value" in entry
+            assert 0.0 <= entry["science_value"] <= 10.0
+
+    async def test_science_heatmap_unknown_env_returns_404(self, client: AsyncClient):
+        r = await client.get("/api/v1/planning/environments/no-such-env/science-heatmap")
+        assert r.status_code == 404
+
+    async def test_multi_agent_plan_optimize_science_metadata(self, client: AsyncClient):
+        mission_id, rover1_id, rover2_id = await self._active_mission_with_rovers(client)
+
+        plans_r = await client.post("/api/v1/planning/multi-agent", json={
+            "mission_id": mission_id,
+            "rover_ids": [rover1_id, rover2_id],
+            "optimize_science": True,
+        })
+        assert plans_r.status_code == 201
+        plans = plans_r.json()
+        assert len(plans) == 2
+        coordinators = {p["metadata"]["coordinator"] for p in plans}
+        assert coordinators == {"greedy_science_roi"}
+
+    async def test_multi_agent_plan_default_uses_greedy_distance(self, client: AsyncClient):
+        mission_id, rover1_id, rover2_id = await self._active_mission_with_rovers(client)
+
+        plans_r = await client.post("/api/v1/planning/multi-agent", json={
+            "mission_id": mission_id,
+            "rover_ids": [rover1_id, rover2_id],
+        })
+        assert plans_r.status_code == 201
+        plans = plans_r.json()
+        coordinators = {p["metadata"]["coordinator"] for p in plans}
+        assert coordinators == {"greedy_distance"}

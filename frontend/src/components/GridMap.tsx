@@ -7,6 +7,7 @@ interface GridMapProps {
   highlightPath?: [number, number][];
   targetCells?: [number, number][];
   cellSize?: number;
+  showScienceOverlay?: boolean;
 }
 
 // Terrain colours intentionally stay fixed — they represent physical surface
@@ -22,6 +23,27 @@ const TERRAIN_COLORS: Record<TerrainType, string> = {
 
 // Dormant geysers are safe traversal targets — distinct muted colour.
 const GEYSER_DORMANT_COLOR = '#4a3060';
+
+// Science heatmap gradient: dark-teal (low) → gold (high), blended as rgba overlay.
+function scienceOverlayColor(value: number): string {
+  // value is 0–10; map to 0–1
+  const t = Math.min(1, value / 10);
+  // low=teal (#0d9488), mid=lime (#84cc16), high=amber (#f59e0b)
+  let r: number, g: number, b: number;
+  if (t < 0.5) {
+    const s = t * 2;
+    r = Math.round(13  + s * (132 - 13));
+    g = Math.round(148 + s * (204 - 148));
+    b = Math.round(136 + s * (22  - 136));
+  } else {
+    const s = (t - 0.5) * 2;
+    r = Math.round(132 + s * (245 - 132));
+    g = Math.round(204 + s * (158 - 204));
+    b = Math.round(22  + s * (11  - 22));
+  }
+  const alpha = 0.15 + t * 0.45;  // 0.15 at low, 0.60 at max
+  return `rgba(${r},${g},${b},${alpha})`;
+}
 
 // Surface frost — subtle blue tint during Enceladus night.
 const FROST_OVERLAY_COLOR = 'rgba(120,180,255,0.18)';
@@ -52,6 +74,7 @@ interface TooltipInfo {
   isHistory: boolean;
   fog: boolean;
   geyserActive: boolean;
+  scienceValue: number;
   rover?: Rover;
 }
 
@@ -61,6 +84,7 @@ export function GridMap({
   highlightPath = [],
   targetCells = [],
   cellSize = 28,
+  showScienceOverlay = false,
 }: GridMapProps) {
   const { grid } = environment;
   const [tooltip, setTooltip] = useState<TooltipInfo | null>(null);
@@ -99,8 +123,9 @@ export function GridMap({
     rover: Rover | undefined,
     fog: boolean,
     geyserActive: boolean,
+    scienceValue: number,
   ) => {
-    setTooltip({ clientX: e.clientX, clientY: e.clientY, gridX: x, gridY: y, terrain, elevation, hasSample, isPath, isTarget, isHistory, fog, geyserActive, rover });
+    setTooltip({ clientX: e.clientX, clientY: e.clientY, gridX: x, gridY: y, terrain, elevation, hasSample, isPath, isTarget, isHistory, fog, geyserActive, scienceValue, rover });
   }, []);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
@@ -138,7 +163,7 @@ export function GridMap({
               <g
                 key={key}
                 style={{ cursor: 'crosshair' }}
-                onMouseEnter={e => handleMouseEnter(e, x, y, cell.terrain, cell.elevation ?? 0, cell.has_sample, isPath, isTgt, isHist, rover, fog, cell.geyser_active ?? true)}
+                onMouseEnter={e => handleMouseEnter(e, x, y, cell.terrain, cell.elevation ?? 0, cell.has_sample, isPath, isTgt, isHist, rover, fog, cell.geyser_active ?? true, cell.science_value ?? 0)}
               >
                 {/* Base fill — fog cells render as uniform near-black */}
                 <rect x={px} y={py} width={cellSize} height={cellSize}
@@ -156,6 +181,12 @@ export function GridMap({
                 {isFrosty && (
                   <rect x={px} y={py} width={cellSize} height={cellSize}
                     fill={FROST_OVERLAY_COLOR} />
+                )}
+
+                {/* Science value heatmap overlay — shown on revealed cells only */}
+                {showScienceOverlay && !fog && (cell.science_value ?? 0) > 0 && (
+                  <rect x={px} y={py} width={cellSize} height={cellSize}
+                    fill={scienceOverlayColor(cell.science_value ?? 0)} />
                 )}
 
                 {/* Dormant geyser indicator — small pulsing dot */}
@@ -285,6 +316,13 @@ export function GridMap({
                     : '💤 Dormant — safe, high science value'}
                 </div>
               )}
+              {tooltip.scienceValue > 0 && (
+                <div style={{ fontSize: 10, color: '#fbbf24', marginBottom: 4 }}>
+                  Science value:{' '}
+                  <span style={{ fontWeight: 700 }}>{tooltip.scienceValue.toFixed(1)}</span>
+                  <span style={{ color: '#64748b' }}> / 10</span>
+                </div>
+              )}
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
                 {tooltip.hasSample && <Tag color="#f59e0b">sample</Tag>}
                 {tooltip.isTarget && <Tag color="#f59e0b">objective</Tag>}
@@ -330,6 +368,16 @@ export function GridMap({
             borderRadius: 4, padding: '1px 6px', color: '#93c5fd', fontWeight: 600,
           }}>
             🌙 Night frost active — movement costs ↑
+          </span>
+        )}
+        {showScienceOverlay && (
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{
+              width: 40, height: 12, display: 'inline-block', borderRadius: 2,
+              background: 'linear-gradient(to right, rgba(13,148,136,0.6), rgba(132,204,22,0.6), rgba(245,158,11,0.75))',
+              border: '1px solid #44444466',
+            }} />
+            science value (low → high)
           </span>
         )}
       </div>

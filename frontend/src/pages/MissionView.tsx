@@ -495,6 +495,8 @@ export function MissionView() {
   const [editing, setEditing]               = useState(false);
   const [editName, setEditName]             = useState('');
   const [editDesc, setEditDesc]             = useState('');
+  const [scienceOverlay, setScienceOverlay] = useState(false);
+  const [optimizeScience, setOptimizeScience] = useState(false);
 
   // Track which rover's plan to show in Explain tab
   const [explainRoverId, setExplainRoverId] = useState<string | null>(null);
@@ -586,6 +588,7 @@ export function MissionView() {
     multiAgentPlan.mutate({
       mission_id: missionId,
       rover_ids: rovers.map(r => r.id),
+      optimize_science: optimizeScience,
     });
   }
 
@@ -727,12 +730,28 @@ export function MissionView() {
             color="#7c3aed"
           />
           {rovers.length >= 2 && (
-            <ActionBtn
-              label={multiAgentPlan.isPending ? 'Coordinating…' : 'Coordinate All Rovers'}
-              onClick={handleMultiAgentPlan}
-              disabled={mission.status !== 'active' || multiAgentPlan.isPending}
-              color="#0f766e"
-            />
+            <>
+              <ActionBtn
+                label={multiAgentPlan.isPending ? 'Coordinating…' : 'Coordinate All Rovers'}
+                onClick={handleMultiAgentPlan}
+                disabled={mission.status !== 'active' || multiAgentPlan.isPending}
+                color={optimizeScience ? '#b45309' : '#0f766e'}
+              />
+              <label style={{
+                display: 'flex', alignItems: 'center', gap: 5, fontSize: 11,
+                cursor: 'pointer', color: optimizeScience ? '#fbbf24' : 'var(--text-muted)',
+                fontWeight: optimizeScience ? 600 : 400,
+                userSelect: 'none',
+              }}>
+                <input
+                  type="checkbox"
+                  checked={optimizeScience}
+                  onChange={e => setOptimizeScience(e.target.checked)}
+                  style={{ accentColor: '#fbbf24', cursor: 'pointer' }}
+                />
+                Maximize science
+              </label>
+            </>
           )}
         </div>
 
@@ -840,6 +859,20 @@ export function MissionView() {
                         Surface frost active — flat/ice movement costs ↑
                       </span>
                     )}
+                    <label style={{
+                      marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 5,
+                      cursor: 'pointer', color: scienceOverlay ? '#fbbf24' : 'var(--text-muted)',
+                      fontWeight: scienceOverlay ? 600 : 400,
+                      userSelect: 'none',
+                    }}>
+                      <input
+                        type="checkbox"
+                        checked={scienceOverlay}
+                        onChange={e => setScienceOverlay(e.target.checked)}
+                        style={{ accentColor: '#fbbf24', cursor: 'pointer' }}
+                      />
+                      Science overlay
+                    </label>
                   </div>
                   <GridMap
                     environment={env}
@@ -847,6 +880,7 @@ export function MissionView() {
                     highlightPath={allWaypoints}
                     targetCells={targetCells}
                     cellSize={26}
+                    showScienceOverlay={scienceOverlay}
                   />
                 </>
               ) : (

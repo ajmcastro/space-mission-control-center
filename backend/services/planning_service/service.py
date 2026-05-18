@@ -137,6 +137,7 @@ class PlanningService:
             rover_positions=rover_positions,
             objectives=mission.objectives,
             grid=env.grid,
+            optimize_science=request.optimize_science,
         )
 
         for plan in plans:
@@ -199,3 +200,16 @@ class PlanningService:
 
     async def list_plans_for_mission(self, session: AsyncSession, mission_id: str) -> list[Plan]:
         return await self._plans.list_for_mission(session, mission_id)
+
+    async def get_science_heatmap(
+        self, session: AsyncSession, environment_id: str
+    ) -> list[dict] | None:
+        """Return per-cell science values for the given environment."""
+        env = await self._environments.get(session, environment_id)
+        if not env:
+            return None
+        return [
+            {"x": cell.x, "y": cell.y, "science_value": cell.science_value}
+            for row in env.grid.cells
+            for cell in row
+        ]

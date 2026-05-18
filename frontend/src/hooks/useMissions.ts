@@ -139,7 +139,7 @@ export function useAutoPlan() {
 export function useMultiAgentPlan() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (payload: { mission_id: string; rover_ids: string[] }) =>
+    mutationFn: (payload: { mission_id: string; rover_ids: string[]; optimize_science?: boolean }) =>
       planningApi.multiAgentPlan(payload),
     onSuccess: (plans) => {
       if (plans.length > 0) {
