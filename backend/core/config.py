@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     # Claude API (V3)
     anthropic_api_key: str = ""
     claude_model: str = "claude-sonnet-4-6"
-    claude_max_tokens: int = 1024
+    claude_max_tokens: int = 4096
 
     # RL Planner (V3)
     rl_episode_budget: int = 500
