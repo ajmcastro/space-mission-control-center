@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+from core.models.rover import AutonomyLevel
 
 
 class SpawnRoverRequest(BaseModel):
@@ -11,3 +12,7 @@ class SpawnRoverRequest(BaseModel):
 class RunPlanRequest(BaseModel):
     mission_id: str
     plan_id: str
+
+
+class SetAutonomyRequest(BaseModel):
+    level: AutonomyLevel

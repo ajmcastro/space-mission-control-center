@@ -3,10 +3,11 @@ import asyncio
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from core.models.rover import Rover, RoverState
+from core.models.rover import Rover, RoverState, AutonomyLevel
 from core.models.command import Command, CommandType
 from core.models.anomaly import Anomaly, AnomalyResolution
-from core.models.plan import PlanStep
+from core.models.mission import Objective, ObjectiveType
+from core.models.plan import Plan, PlanStep, PlannerType
 from core.events import EventBus, MissionEvent, EventType
 from core.config import settings
 from core.repositories import (
@@ -17,6 +18,7 @@ from core.models.environment import Environment
 from .executor import CommandExecutor
 from .fault_protection import FaultProtectionEngine, FPSAction
 from .terrain_events import TerrainEventEngine
+from .aegis import select_target, AegisTarget
 
 log = structlog.get_logger(__name__)
 
@@ -34,6 +36,8 @@ class SimulationService:
         self._rovers = RoverRepository()
         self._plans = PlanRepository()
         self._anomalies = AnomalyRepository()
+        # AEGIS supervised proposals: rover_id → AegisTarget (pending approval)
+        self._aegis_proposals: dict[str, AegisTarget] = {}
 
     async def _reveal(
         self,
@@ -131,6 +135,148 @@ class SimulationService:
             "running": running,
             "rovers": [r.model_dump() for r in rovers],
         }
+
+    async def set_autonomy_level(
+        self, session: AsyncSession, rover_id: str, level: AutonomyLevel
+    ) -> Rover | None:
+        rover = await self._rovers.get(session, rover_id)
+        if not rover:
+            return None
+        rover.autonomy_level = level
+        await self._rovers.save(session, rover)
+        await session.commit()
+        log.info("rover_autonomy_updated", rover=rover.name, level=level.value)
+        return rover
+
+    def get_aegis_proposal(self, rover_id: str) -> AegisTarget | None:
+        return self._aegis_proposals.get(rover_id)
+
+    async def approve_aegis_proposal(
+        self, session: AsyncSession, mission_id: str, rover_id: str
+    ) -> bool:
+        """Accept the pending AEGIS proposal: create a single-objective plan and start it."""
+        proposal = self._aegis_proposals.pop(rover_id, None)
+        if not proposal:
+            return False
+
+        rover = await self._rovers.get(session, rover_id)
+        mission = await self._missions.get(session, mission_id)
+        env_repo = EnvironmentRepository()
+        env = await env_repo.get(session, mission.environment_id) if mission else None
+        if not rover or not mission or not env:
+            return False
+
+        steps = self._build_aegis_steps(rover, proposal, mission_id, env)
+        if not steps:
+            return False
+
+        rover.aegis_objectives_generated += 1
+        await self._rovers.save(session, rover)
+        mission.objectives.append(Objective(
+            type=ObjectiveType.REACH_WAYPOINT,
+            target_x=proposal.x,
+            target_y=proposal.y,
+            description=f"AEGIS: {proposal.reason}",
+            priority=100,
+        ))
+        await self._missions.save(session, mission)
+        await session.commit()
+
+        plan = Plan(mission_id=mission_id, rover_id=rover_id, planner=PlannerType.ASTAR)
+        plan.steps = steps
+        plan.estimated_steps = len(steps)
+        plan_repo = PlanRepository()
+        await plan_repo.save(session, plan)
+        await session.commit()
+        await self.run_plan(mission_id, plan.id)
+        return True
+
+    async def reject_aegis_proposal(self, rover_id: str) -> bool:
+        return self._aegis_proposals.pop(rover_id, None) is not None
+
+    def _build_aegis_steps(
+        self,
+        rover: Rover,
+        target: AegisTarget,
+        mission_id: str,
+        env: Environment,
+    ) -> list[PlanStep]:
+        from services.planning_service.astar import astar
+        path, _ = astar(env.grid, (rover.x, rover.y), (target.x, target.y))
+        if not path:
+            return []
+        steps: list[PlanStep] = []
+        for i, (wx, wy) in enumerate(path[1:]):
+            cmd = Command(
+                mission_id=mission_id,
+                rover_id=rover.id,
+                type=CommandType.MOVE,
+                sequence=i,
+                target_x=wx,
+                target_y=wy,
+            )
+            cell = env.grid.get_cell(wx, wy)
+            cost = settings.rover_move_cost * (cell.movement_cost if cell else 1.0)
+            steps.append(PlanStep(sequence=i, command=cmd,
+                                  rationale=f"AEGIS: {target.reason}"))
+        target_cell = env.grid.get_cell(target.x, target.y)
+        if target_cell and target_cell.has_sample:
+            sample_cmd = Command(
+                mission_id=mission_id,
+                rover_id=rover.id,
+                type=CommandType.COLLECT_SAMPLE,
+                sequence=len(steps),
+                target_x=target.x,
+                target_y=target.y,
+            )
+            steps.append(PlanStep(sequence=len(steps), command=sample_cmd,
+                                  rationale="AEGIS: sample collection"))
+        return steps
+
+    async def _aegis_extend(
+        self,
+        session: AsyncSession,
+        mission,
+        rover: Rover,
+        env: Environment,
+        mission_id: str,
+        env_repo,
+    ) -> list[PlanStep]:
+        """Select an AEGIS target and return its plan steps; updates mission and rover."""
+        target = select_target(rover, env.grid, rover.autonomy_level)
+        if not target:
+            return []
+
+        steps = self._build_aegis_steps(rover, target, mission_id, env)
+        if not steps:
+            return []
+
+        rover.aegis_objectives_generated += 1
+        await self._rovers.save(session, rover)
+
+        mission.objectives.append(Objective(
+            type=ObjectiveType.REACH_WAYPOINT,
+            target_x=target.x,
+            target_y=target.y,
+            description=f"AEGIS: {target.reason}",
+            priority=100,
+        ))
+        await self._missions.save(session, mission)
+        await session.commit()
+
+        await self._bus.publish(MissionEvent(
+            type=EventType.AEGIS_TARGET_SELECTED,
+            stream=settings.mission_stream,
+            mission_id=mission_id,
+            rover_id=rover.id,
+            payload={
+                "x": target.x, "y": target.y,
+                "score": round(target.score, 3),
+                "reason": target.reason,
+                "total_auto": rover.aegis_objectives_generated,
+            },
+        ))
+        return steps
 
     async def _execute_plan(self, mission_id: str, plan_id: str) -> None:
         """Background task — owns its own DB session for the full execution lifetime."""
@@ -410,6 +556,98 @@ class SimulationService:
                 idx += 1
 
             log.info("execute_plan_done", plan_id=plan_id, rover_pos=(rover.x, rover.y))
+
+            # ── AEGIS autonomous continuation ────────────────────────────────
+            # When the rover exhausts its assigned plan and is still operational,
+            # use AEGIS scoring to pick the next science target automatically
+            # (semi/fully autonomous) or propose it for ground control (supervised).
+            if (
+                rover.is_operational
+                and rover.autonomy_level != AutonomyLevel.SUPERVISED
+                and rover.aegis_objectives_generated < settings.aegis_max_auto_objectives
+            ):
+                aegis_steps = await self._aegis_extend(
+                    session, mission, rover, env, mission_id, env_repo
+                )
+                if aegis_steps:
+                    pending = aegis_steps
+                    idx = 0
+                    # Re-enter the execution loop with autonomously generated steps.
+                    while idx < len(pending):
+                        step = pending[idx]
+                        if not rover.is_operational:
+                            break
+
+                        cmd, anomaly = await self._executor.execute(step.command, rover, env, session)
+                        await self._rovers.save(session, rover)
+                        await self._reveal(session, env, mission_id, rover.id, rover.x, rover.y)
+
+                        if anomaly:
+                            anomalies.append(anomaly)
+                            await self._anomalies.append(session, anomaly)
+                            await self._bus.publish(MissionEvent(
+                                type=EventType.ANOMALY_DETECTED,
+                                stream=settings.anomaly_stream,
+                                mission_id=mission_id,
+                                rover_id=rover.id,
+                                payload={"type": anomaly.type.value, "severity": anomaly.severity.value},
+                            ))
+                            fps_result = self._fps.handle(rover, anomaly, mission.objectives, env.grid)
+                            if fps_result.action == FPSAction.SAFE_MODE:
+                                rover.state = RoverState.SAFE_MODE
+                                rover.safe_mode_reason = fps_result.reason
+                                await self._rovers.save(session, rover)
+                                await session.commit()
+                                break
+                        else:
+                            self._fps.reset_streak(rover)
+
+                        terrain_changes = self._terrain.tick(env, mission_id, rover.id)
+                        if terrain_changes:
+                            await env_repo.save(session, env)
+                            for change in terrain_changes:
+                                await self._bus.publish(MissionEvent(
+                                    type=change.event_type,
+                                    stream=settings.telemetry_stream,
+                                    mission_id=mission_id,
+                                    rover_id=rover.id,
+                                    payload=change.payload | {"description": change.description,
+                                                               "x": change.x, "y": change.y},
+                                ))
+
+                        for obj in mission.objectives:
+                            if not obj.completed and (rover.x, rover.y) == (obj.target_x, obj.target_y):
+                                obj.complete()
+                        await self._missions.save(session, mission)
+                        await session.commit()
+
+                        idx += 1
+
+            elif (
+                rover.is_operational
+                and rover.autonomy_level == AutonomyLevel.SUPERVISED
+                and rover.aegis_objectives_generated < settings.aegis_max_auto_objectives
+            ):
+                target = select_target(rover, env.grid, AutonomyLevel.SUPERVISED)
+                if target:
+                    self._aegis_proposals[rover.id] = target
+                    await self._bus.publish(MissionEvent(
+                        type=EventType.AEGIS_TARGET_PROPOSED,
+                        stream=settings.mission_stream,
+                        mission_id=mission_id,
+                        rover_id=rover.id,
+                        payload={
+                            "x": target.x, "y": target.y,
+                            "score": round(target.score, 3),
+                            "reason": target.reason,
+                        },
+                    ))
+                    log.info(
+                        "aegis_proposal_pending",
+                        rover=rover.name,
+                        target=(target.x, target.y),
+                        reason=target.reason,
+                    )
 
             # Final objective check — guards against objectives whose matching step was
             # skipped by a terrain-replan or whose loop iteration exited early.

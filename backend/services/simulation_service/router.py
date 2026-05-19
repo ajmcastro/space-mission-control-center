@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from core.models.rover import Rover
 from api.deps import get_simulation_service, get_session
 from .service import SimulationService
-from .schemas import SpawnRoverRequest, RunPlanRequest
+from .schemas import SpawnRoverRequest, RunPlanRequest, SetAutonomyRequest
 
 router = APIRouter(prefix="/simulation", tags=["simulation"])
 
@@ -67,3 +67,57 @@ async def simulation_status(
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     return await svc.get_simulation_status(session, mission_id)
+
+
+@router.patch("/rovers/{rover_id}/autonomy", response_model=Rover)
+async def set_autonomy(
+    rover_id: str,
+    req: SetAutonomyRequest,
+    svc: SimulationService = Depends(get_simulation_service),
+    session: AsyncSession = Depends(get_session),
+) -> Rover:
+    rover = await svc.set_autonomy_level(session, rover_id, req.level)
+    if not rover:
+        raise HTTPException(404, f"Rover {rover_id} not found")
+    return rover
+
+
+@router.get("/rovers/{rover_id}/aegis-proposal")
+async def get_aegis_proposal(
+    rover_id: str,
+    svc: SimulationService = Depends(get_simulation_service),
+) -> dict:
+    proposal = svc.get_aegis_proposal(rover_id)
+    if not proposal:
+        return {"pending": False}
+    return {
+        "pending": True,
+        "x": proposal.x,
+        "y": proposal.y,
+        "score": round(proposal.score, 3),
+        "reason": proposal.reason,
+    }
+
+
+@router.post("/rovers/{rover_id}/aegis-proposal/approve")
+async def approve_aegis_proposal(
+    rover_id: str,
+    mission_id: str,
+    svc: SimulationService = Depends(get_simulation_service),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    ok = await svc.approve_aegis_proposal(session, mission_id, rover_id)
+    if not ok:
+        raise HTTPException(404, "No pending AEGIS proposal for this rover")
+    return {"approved": True, "rover_id": rover_id}
+
+
+@router.post("/rovers/{rover_id}/aegis-proposal/reject")
+async def reject_aegis_proposal(
+    rover_id: str,
+    svc: SimulationService = Depends(get_simulation_service),
+) -> dict:
+    ok = await svc.reject_aegis_proposal(rover_id)
+    if not ok:
+        raise HTTPException(404, "No pending AEGIS proposal for this rover")
+    return {"rejected": True, "rover_id": rover_id}

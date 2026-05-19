@@ -38,6 +38,16 @@ export type RoverState =
   | 'idle' | 'moving' | 'sampling' | 'charging'
   | 'stuck' | 'comm_lost' | 'error' | 'safe_mode';
 
+export type AutonomyLevel = 'supervised' | 'semi_autonomous' | 'fully_autonomous';
+
+export interface AegisProposal {
+  pending: boolean;
+  x?: number;
+  y?: number;
+  score?: number;
+  reason?: string;
+}
+
 export interface RoverSpec {
   max_battery: number;
   move_cost_per_cell: number;
@@ -65,6 +75,9 @@ export interface Rover {
   // FPS fields (V4)
   anomaly_streak: number;
   safe_mode_reason: string | null;
+  // AEGIS fields (V4)
+  autonomy_level: AutonomyLevel;
+  aegis_objectives_generated: number;
 }
 
 export type TerrainType = 'flat' | 'rocky' | 'ice' | 'crater' | 'geyser' | 'crevasse';

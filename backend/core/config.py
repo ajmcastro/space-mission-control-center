@@ -78,5 +78,8 @@ class Settings(BaseSettings):
     terrain_frost_period_ticks: int = 20         # full day/night cycle length (night = half this)
     terrain_frost_cost_factor: float = 1.4       # movement cost multiplier during night frost
 
+    # AEGIS Autonomous Target Selection (V4)
+    aegis_max_auto_objectives: int = 10   # cap on self-generated objectives per mission run
+
 
 settings = Settings()

@@ -47,6 +47,10 @@ class EventType(str, Enum):
     FROST_CYCLE_START = "terrain.frost_cycle_start"
     FROST_CYCLE_END   = "terrain.frost_cycle_end"
 
+    # AEGIS Autonomous Target Selection (V4)
+    AEGIS_TARGET_SELECTED = "aegis.target_selected"   # rover autonomously selected a new objective
+    AEGIS_TARGET_PROPOSED = "aegis.target_proposed"   # supervised rover awaiting approval
+
 
 class MissionEvent(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))

@@ -49,6 +49,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 function RoverPanel({
   rover,
+  missionId,
   missionStatus,
   plan,
   onPlan,
@@ -57,6 +58,7 @@ function RoverPanel({
   runPending,
 }: {
   rover: Rover;
+  missionId: string;
   missionStatus: string;
   plan?: { id: string; total_commands: number; estimated_total_battery: number; planner?: string; metadata?: Record<string, unknown> } | null;
   onPlan: (roverId: string, planner: string) => void;
@@ -74,7 +76,7 @@ function RoverPanel({
       background: 'var(--surface)', border: '1px solid var(--border)',
       borderRadius: 8, padding: '10px 12px', marginBottom: 10,
     }}>
-      <RoverStatus rover={rover} />
+      <RoverStatus rover={rover} missionId={missionId} />
       <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         <select
           value={selectedPlanner}
@@ -1190,6 +1192,7 @@ export function MissionView() {
             <RoverPanel
               key={r.id}
               rover={r}
+              missionId={mission.id}
               missionStatus={mission.status}
               plan={plansByRover[r.id] ?? null}
               onPlan={handleAutoPlan}

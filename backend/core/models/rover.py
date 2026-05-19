@@ -15,6 +15,12 @@ class RoverState(str, Enum):
     SAFE_MODE = "safe_mode"
 
 
+class AutonomyLevel(str, Enum):
+    SUPERVISED = "supervised"           # propose targets, wait for ground control approval
+    SEMI_AUTONOMOUS = "semi_autonomous" # self-direct within already-revealed terrain
+    FULLY_AUTONOMOUS = "fully_autonomous"  # self-direct across entire grid
+
+
 class RoverSpec(BaseModel):
     max_battery: float = 1000.0
     move_cost_per_cell: float = 10.0
@@ -44,6 +50,10 @@ class Rover(BaseModel):
     # Fault Protection System (V4)
     anomaly_streak: int = 0           # consecutive anomaly hits without a clean step
     safe_mode_reason: str | None = None
+
+    # AEGIS Autonomous Target Selection (V4)
+    autonomy_level: AutonomyLevel = AutonomyLevel.SUPERVISED
+    aegis_objectives_generated: int = 0  # cumulative count of auto-generated objectives
 
     @property
     def position(self) -> tuple[int, int]:
