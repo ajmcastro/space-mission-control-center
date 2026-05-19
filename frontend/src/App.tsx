@@ -1,16 +1,50 @@
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { useTheme } from '@/hooks/useTheme';
 import { Dashboard } from '@/pages/Dashboard';
 import { MissionPlanner } from '@/pages/MissionPlanner';
 import { MissionView } from '@/pages/MissionView';
+import { missionsApi, simulationApi } from '@/services/api';
+import type { Mission, Rover } from '@/types';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 2000 } },
 });
 
+function useLinkStatus() {
+  const { data: missions = [] } = useQuery<Mission[]>({
+    queryKey: ['missions'],
+    queryFn: missionsApi.list,
+    refetchInterval: 5000,
+  });
+  const { data: rovers = [] } = useQuery<Rover[]>({
+    queryKey: ['rovers', undefined],
+    queryFn: () => simulationApi.listRovers(),
+    refetchInterval: 3000,
+  });
+
+  const activeMissions = missions.filter(m => m.status === 'active');
+  const activeRoverIds = new Set(activeMissions.flatMap(m => m.rover_ids));
+  const activeRovers  = rovers.filter(r => r.id && activeRoverIds.has(r.id));
+  const commLost      = activeRovers.filter(r => r.state === 'comm_lost');
+
+  if (activeMissions.length === 0) {
+    return { label: 'NO ACTIVE MISSIONS', color: '#6b7280', detail: 'Δt +67 min (one-way)' } as const;
+  }
+  if (commLost.length > 0) {
+    const names = commLost.map(r => r.name).join(', ');
+    return { label: 'LINK DEGRADED', color: '#f59e0b', detail: `${commLost.length} rover${commLost.length > 1 ? 's' : ''} comm lost: ${names}` } as const;
+  }
+  return {
+    label: 'LINK NOMINAL',
+    color: '#22c55e',
+    detail: `${activeRovers.length} rover${activeRovers.length !== 1 ? 's' : ''} · Δt +67 min`,
+  } as const;
+}
+
 function Sidebar() {
   const { toggle, isDark } = useTheme();
+  const link = useLinkStatus();
 
   return (
     <aside style={{
@@ -53,8 +87,10 @@ function Sidebar() {
           <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.12em', fontWeight: 600 }}>
             Saturn System
           </div>
-          <div style={{ fontSize: 12, color: 'var(--accent-green)', fontWeight: 700, marginBottom: 3 }}>● LINK NOMINAL</div>
-          <div style={{ fontSize: 11, color: 'var(--text-sec)' }}>Δt +67 min (one-way)</div>
+          <div style={{ fontSize: 12, color: link.color, fontWeight: 700, marginBottom: 3, transition: 'color 0.3s' }}>
+            ● {link.label}
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.4 }}>{link.detail}</div>
         </div>
 
         {/* Theme toggle */}
