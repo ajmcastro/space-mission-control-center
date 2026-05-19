@@ -23,12 +23,11 @@ function useLinkStatus() {
     refetchInterval: 3000,
   });
 
-  const activeMissions = missions.filter(m => m.status === 'active');
-  const activeRoverIds = new Set(activeMissions.flatMap(m => m.rover_ids));
-  const activeRovers  = rovers.filter(r => r.id && activeRoverIds.has(r.id));
-  const commLost      = activeRovers.filter(r => r.state === 'comm_lost');
+  const activeMissionIds = new Set(missions.filter(m => m.status === 'active').map(m => m.id));
+  const activeRovers     = rovers.filter(r => r.mission_id && activeMissionIds.has(r.mission_id));
+  const commLost         = activeRovers.filter(r => r.state === 'comm_lost');
 
-  if (activeMissions.length === 0) {
+  if (activeMissionIds.size === 0) {
     return { label: 'NO ACTIVE MISSIONS', color: '#6b7280', detail: 'Δt +67 min (one-way)' } as const;
   }
   if (commLost.length > 0) {
