@@ -570,9 +570,9 @@ class SimulationService:
                     session, mission, rover, env, mission_id, env_repo
                 )
                 if aegis_steps:
+                    # Run AEGIS steps through the same full execution loop (reuse pending/idx).
                     pending = aegis_steps
                     idx = 0
-                    # Re-enter the execution loop with autonomously generated steps.
                     while idx < len(pending):
                         step = pending[idx]
                         if not rover.is_operational:
@@ -593,12 +593,67 @@ class SimulationService:
                                 payload={"type": anomaly.type.value, "severity": anomaly.severity.value},
                             ))
                             fps_result = self._fps.handle(rover, anomaly, mission.objectives, env.grid)
+                            await self._bus.publish(MissionEvent(
+                                type=EventType.FPS_RULE_TRIGGERED,
+                                stream=settings.telemetry_stream,
+                                mission_id=mission_id,
+                                rover_id=rover.id,
+                                payload={
+                                    "anomaly_type": anomaly.type.value,
+                                    "action": fps_result.action.value,
+                                    "reason": fps_result.reason,
+                                    "streak": rover.anomaly_streak,
+                                },
+                            ))
                             if fps_result.action == FPSAction.SAFE_MODE:
                                 rover.state = RoverState.SAFE_MODE
                                 rover.safe_mode_reason = fps_result.reason
                                 await self._rovers.save(session, rover)
                                 await session.commit()
                                 break
+                            elif fps_result.action == FPSAction.CONTINUE:
+                                anomaly.resolve(fps_result.resolution)
+                                await self._anomalies.resolve(session, anomaly.id, fps_result.resolution.value)
+                                await session.commit()
+                            elif fps_result.action == FPSAction.RETRY:
+                                rover.state = RoverState.IDLE
+                                await self._rovers.save(session, rover)
+                                await session.commit()
+                                await asyncio.sleep(1.0)
+                                continue
+                            elif fps_result.action == FPSAction.REVERSE:
+                                if rover.path_history:
+                                    px, py = rover.path_history[-1]
+                                    reverse_cmd = Command(
+                                        mission_id=mission_id, rover_id=rover.id,
+                                        type=CommandType.MOVE, sequence=-1,
+                                        target_x=px, target_y=py,
+                                    )
+                                    rover.state = RoverState.IDLE
+                                    await self._rovers.save(session, rover)
+                                    await session.commit()
+                                    await self._executor.execute(reverse_cmd, rover, env, session)
+                                    await self._rovers.save(session, rover)
+                                    await self._reveal(session, env, mission_id, rover.id, rover.x, rover.y)
+                                anomaly.resolve(fps_result.resolution)
+                                await self._anomalies.resolve(session, anomaly.id, fps_result.resolution.value)
+                                rover.state = RoverState.IDLE
+                                await self._rovers.save(session, rover)
+                                await session.commit()
+                                continue
+                            elif fps_result.action == FPSAction.REPLAN:
+                                new_steps = [
+                                    PlanStep(sequence=i, command=c, rationale="AEGIS FPS replan")
+                                    for i, c in enumerate(fps_result.new_commands)
+                                ]
+                                pending = new_steps
+                                idx = 0
+                                anomaly.resolve(fps_result.resolution)
+                                await self._anomalies.resolve(session, anomaly.id, fps_result.resolution.value)
+                                rover.state = RoverState.IDLE
+                                await self._rovers.save(session, rover)
+                                await session.commit()
+                                continue
                         else:
                             self._fps.reset_streak(rover)
 

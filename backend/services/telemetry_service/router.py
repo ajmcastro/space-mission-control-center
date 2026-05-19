@@ -143,6 +143,13 @@ async def resolve_anomaly(
             rover.safe_mode_reason = None
             await _rover_repo.save(session, rover)
 
+        # Ground-control override: dismiss any anomaly when rover is stuck.
+        # Restores IDLE so the operator can re-run the plan from the rover's current position.
+        elif rover.state == RoverState.STUCK:
+            rover.state = RoverState.IDLE
+            rover.anomaly_streak = 0
+            await _rover_repo.save(session, rover)
+
     await session.commit()
     return anomaly
 
