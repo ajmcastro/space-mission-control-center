@@ -21,3 +21,11 @@ class RoverRow(Base):
     total_distance:       Mapped[float]          = mapped_column(Float, default=0.0)
     anomalies_encountered: Mapped[int]           = mapped_column(Integer, default=0)
     created_at:           Mapped[datetime]       = mapped_column(DateTime(timezone=True), nullable=False)
+
+    # V4 Fault Protection System
+    anomaly_streak:       Mapped[int]            = mapped_column(Integer, default=0)
+    safe_mode_reason:     Mapped[str | None]     = mapped_column(String, nullable=True)
+
+    # V4 AEGIS Autonomous Target Selection
+    autonomy_level:       Mapped[str]            = mapped_column(String, default="supervised")
+    aegis_objectives_generated: Mapped[int]      = mapped_column(Integer, default=0)

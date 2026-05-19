@@ -2,7 +2,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.db_models.rover import RoverRow
-from core.models.rover import Rover, RoverState, RoverSpec
+from core.models.rover import Rover, RoverState, RoverSpec, AutonomyLevel
 
 
 def _to_domain(row: RoverRow) -> Rover:
@@ -21,6 +21,10 @@ def _to_domain(row: RoverRow) -> Rover:
         total_distance=row.total_distance,
         anomalies_encountered=row.anomalies_encountered,
         created_at=row.created_at,
+        anomaly_streak=row.anomaly_streak or 0,
+        safe_mode_reason=row.safe_mode_reason,
+        autonomy_level=AutonomyLevel(row.autonomy_level or "supervised"),
+        aegis_objectives_generated=row.aegis_objectives_generated or 0,
     )
 
 
@@ -40,6 +44,10 @@ def _to_row(rover: Rover) -> RoverRow:
         total_distance=rover.total_distance,
         anomalies_encountered=rover.anomalies_encountered,
         created_at=rover.created_at,
+        anomaly_streak=rover.anomaly_streak,
+        safe_mode_reason=rover.safe_mode_reason,
+        autonomy_level=rover.autonomy_level.value,
+        aegis_objectives_generated=rover.aegis_objectives_generated,
     )
 
 
@@ -77,6 +85,10 @@ class RoverRepository:
             existing.total_distance = rover.total_distance
             existing.anomalies_encountered = rover.anomalies_encountered
             existing.mission_id = rover.mission_id
+            existing.anomaly_streak = rover.anomaly_streak
+            existing.safe_mode_reason = rover.safe_mode_reason
+            existing.autonomy_level = rover.autonomy_level.value
+            existing.aegis_objectives_generated = rover.aegis_objectives_generated
         else:
             session.add(_to_row(rover))
         await session.flush()
