@@ -4,8 +4,8 @@ import { useTheme } from '@/hooks/useTheme';
 import { Dashboard } from '@/pages/Dashboard';
 import { MissionPlanner } from '@/pages/MissionPlanner';
 import { MissionView } from '@/pages/MissionView';
-import { missionsApi, simulationApi } from '@/services/api';
-import type { Mission, Rover } from '@/types';
+import { missionsApi, simulationApi, telemetryApi } from '@/services/api';
+import type { Mission, Rover, Anomaly } from '@/types';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 2000 } },
@@ -22,17 +22,36 @@ function useLinkStatus() {
     queryFn: () => simulationApi.listRovers(),
     refetchInterval: 3000,
   });
+  const { data: anomalies = [] } = useQuery<Anomaly[]>({
+    queryKey: ['anomalies'],
+    queryFn: () => telemetryApi.getAnomalies(),
+    refetchInterval: 4000,
+  });
 
   const activeMissionIds = new Set(missions.filter(m => m.status === 'active').map(m => m.id));
   const activeRovers     = rovers.filter(r => r.mission_id && activeMissionIds.has(r.mission_id));
-  const commLost         = activeRovers.filter(r => r.state === 'comm_lost');
+
+  // A pending comm_loss anomaly on any active rover means the link is degraded —
+  // even if the rover recovered to IDLE (FPS retries are fast, state is transient).
+  const pendingCommLoss = anomalies.filter(
+    a => a.type === 'comm_loss'
+      && a.resolution === 'pending'
+      && activeRovers.some(r => r.id === a.rover_id),
+  );
 
   if (activeMissionIds.size === 0) {
     return { label: 'NO ACTIVE MISSIONS', color: '#6b7280', detail: 'Δt +67 min (one-way)' } as const;
   }
-  if (commLost.length > 0) {
-    const names = commLost.map(r => r.name).join(', ');
-    return { label: 'LINK DEGRADED', color: '#f59e0b', detail: `${commLost.length} rover${commLost.length > 1 ? 's' : ''} comm lost: ${names}` } as const;
+  if (pendingCommLoss.length > 0) {
+    const names = [...new Set(pendingCommLoss.map(a => {
+      const r = activeRovers.find(r => r.id === a.rover_id);
+      return r?.name ?? a.rover_id.slice(0, 8);
+    }))].join(', ');
+    return {
+      label: 'LINK DEGRADED',
+      color: '#f59e0b',
+      detail: `comm loss · ${names}`,
+    } as const;
   }
   return {
     label: 'LINK NOMINAL',
