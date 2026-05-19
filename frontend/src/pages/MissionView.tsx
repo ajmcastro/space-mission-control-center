@@ -1158,7 +1158,21 @@ export function MissionView() {
                         >
                           {llm.text}
                         </Markdown>
-                        {llm.loading && <span style={{ color: 'var(--accent)' }}>▌</span>}
+                        {llm.loading
+                          ? <span style={{ color: 'var(--accent)' }}>▌</span>
+                          : <div style={{
+                              display: 'inline-flex', alignItems: 'center', gap: 5,
+                              marginTop: 10, fontSize: 10, color: 'var(--text-muted)',
+                              borderTop: '1px solid var(--border)', paddingTop: 8,
+                              width: '100%',
+                            }}>
+                              <span style={{
+                                display: 'inline-block', width: 7, height: 7,
+                                borderRadius: '50%', background: 'var(--accent-green)',
+                              }} />
+                              Analysis complete
+                            </div>
+                        }
                       </div>
                     )}
                   </div>
