@@ -299,6 +299,48 @@ curl -sN "$BASE/explain/llm/plan/$PLAN_ID" | grep '^data:' | head -5
 
 ---
 
+## V4 Workflow (Autonomy, Environment & Comms)
+
+Fog of war, autonomy level, and comm windows are directly triggerable. Fault Protection and Dynamic Terrain Events are probabilistic/background-driven, so those steps poll and observe rather than call-and-get-result.
+
+```bash
+BASE=http://localhost:8000/api/v1
+
+# 1–5: same as V1 workflow above (create mission, start, spawn rover, plan, execute)
+
+# 6. Fog of war — cells start unrevealed; check progress and night-cycle state
+ENV_ID=$(curl -s $BASE/missions/$MISSION_ID | python3 -c "import sys,json; print(json.load(sys.stdin)['environment_id'])")
+curl -s $BASE/missions/$MISSION_ID/environment | python3 -c "
+import sys, json
+env = json.load(sys.stdin)
+cells = [c for row in env['grid']['cells'] for c in row]
+revealed = sum(c['revealed'] for c in cells)
+print(f\"{revealed}/{len(cells)} cells revealed | sim_tick={env['sim_tick']} | night={env['is_night']}\")
+"
+
+# 7. Fault Protection & Dynamic Terrain Events are probabilistic/background-driven —
+#    poll anomalies while the plan runs to watch FPS decisions (retry/reverse/replan/
+#    safe mode) and geyser eruption / ice fracture / frost events as they happen
+watch -n 2 "curl -s $BASE/telemetry/anomalies/$MISSION_ID | python3 -m json.tool"
+# Ctrl+C to stop — or inspect the Telemetry tab in the UI for FPS_RULE_TRIGGERED,
+# GEYSER_ERUPTION, ICE_FRACTURE, FROST_CYCLE_START events
+
+# 8. Science Value Map — per-cell science scores for this environment
+curl -s $BASE/planning/environments/$ENV_ID/science-heatmap | python3 -m json.tool
+
+# 9. AEGIS — switch a rover to fully autonomous so it self-generates objectives once
+#    its assigned plan is exhausted. This is gated by the comm window (V4): the
+#    response tells you whether it applied immediately or was queued for delivery
+curl -s -X PATCH $BASE/simulation/rovers/$ROVER_ID/autonomy \
+  -H "Content-Type: application/json" -d '{"level": "fully_autonomous"}' | python3 -m json.tool
+
+# 10. Communication Windows — check the current uplink schedule and any queued commands
+curl -s $BASE/comm/status | python3 -m json.tool
+curl -s $BASE/comm/$MISSION_ID/queue | python3 -m json.tool
+```
+
+---
+
 ## Contributing / Agent Instructions
 
 See [CLAUDE.md](CLAUDE.md) for the full set of rules that govern how code and documentation changes are made in this repo — including mandatory doc-update rules, package management conventions, testing requirements, and feature-addition checklists.
