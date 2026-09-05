@@ -161,14 +161,14 @@ The bus is `InMemoryEventBus` in V1. Do **not** hard-code Redis anywhere — use
 
 - State lives **in-memory** (dicts, registries, ring buffers). No DB writes in V1.
 - The event bus is `InMemoryEventBus`. Swapping to Redis is a one-line change in `main.py`.
-- All 5 services run in **one FastAPI process**. Do not split into microservices yet.
+- All services run in **one FastAPI process**. Do not split into microservices yet.
 - SQLite is the default `DATABASE_URL`. PostgreSQL is activated by env var.
 
 ---
 
-## Current Architecture State (V3 complete)
+## Current Architecture State (V4 complete, V5 planned)
 
-All V1, V2, and V3 features are shipped. The system runs as a single FastAPI process with SQLite (dev) or PostgreSQL (prod).
+All V1–V4 features are shipped. The system runs as a single FastAPI process with SQLite (dev) or PostgreSQL (prod).
 
 ### What is in production
 - **Persistence** — SQLAlchemy async ORM + Alembic migrations (`core/db_models/`, `core/repositories/`)
@@ -179,7 +179,7 @@ All V1, V2, and V3 features are shipped. The system runs as a single FastAPI pro
 - **Frontend tabs** — Map (2D SVG) · Telemetry (filter by rover/type, paginated 50/page, up to 2 000 events, colour-coded event badges) · Charts · Timeline · Explain (command-type filter, 30-step pagination, battery cost column, non-MOVE step highlighting, Claude SSE analysis) · 3D (React Three Fiber) · Anomalies (full history, sort + filter)
 
 ### V1 constraints still in force
-- All 5 services run in **one FastAPI process**. Do not split into microservices without discussion.
+- All services (now 6: mission, planning, simulation, telemetry, explainability, comm) run in **one FastAPI process**. Do not split into microservices without discussion.
 - SQLite is the default `DATABASE_URL`. PostgreSQL is activated by env var.
 - The event bus abstraction must be preserved — never call between services directly.
 

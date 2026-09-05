@@ -120,8 +120,8 @@ test: ## Run all backend tests
 test-verbose: ## Run all tests with verbose output
 	cd $(BACKEND) && uv run pytest -v
 
-test-unit: ## Run unit tests only (astar + simulation models)
-	cd $(BACKEND) && uv run pytest tests/test_astar.py tests/test_simulation.py -v
+test-unit: ## Run unit tests only (astar + simulation models + aegis + comm windows)
+	cd $(BACKEND) && uv run pytest tests/test_astar.py tests/test_simulation.py tests/test_aegis.py tests/test_comm_windows.py -v
 
 test-api: ## Run API integration tests
 	cd $(BACKEND) && uv run pytest tests/test_mission_api.py -v

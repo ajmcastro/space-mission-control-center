@@ -28,6 +28,11 @@ A production-grade space mission control system simulating rover operations on E
 │  │  Event history  │  │  Plan · Mission · Anomaly explain (SSE)     │ │
 │  └─────────────────┘  └────────────────────────────────────────────┘ │
 │                                                                       │
+│  ┌─────────────────────────────────────────────────────────────────┐ │
+│  │                        comm_service                              │ │
+│  │      Comm window schedule · uplink queue for gated actions       │ │
+│  └─────────────────────────────────────────────────────────────────┘ │
+│                                                                       │
 │  ┌────────────────────────────────────────────────────────────────┐  │
 │  │                    Event Bus (abstract)                         │  │
 │  │    InMemoryEventBus (default)  →  RedisStreamBus (USE_REDIS)   │  │
@@ -132,9 +137,9 @@ All developer commands are available via `make`. Run `make help` for the full li
 | `make dev` | Start backend + frontend in parallel |
 | `make dev-backend` | FastAPI server with hot-reload |
 | `make dev-frontend` | Vite dev server |
-| `make test` | Run all backend tests (24 total) |
+| `make test` | Run all backend tests (53 total) |
 | `make test-verbose` | Tests with full output |
-| `make test-unit` | Unit tests only (A* + simulation) |
+| `make test-unit` | Unit tests only (A* + simulation + AEGIS + comm windows) |
 | `make test-api` | API integration tests |
 | `make lint` | Run ruff linter on backend |
 | `make build` | Build frontend for production |
@@ -182,9 +187,9 @@ make docker-rebuild  # full rebuild
 ## Running Tests
 
 ```bash
-make test           # all tests (24 total)
+make test           # all tests (53 total)
 make test-verbose   # with full output
-make test-unit      # A* + simulation unit tests (fast)
+make test-unit      # A* + simulation + AEGIS + comm windows unit tests (fast)
 make test-api       # API integration tests
 
 # Or directly from backend/:
@@ -328,7 +333,8 @@ space-missions-control-center/
 │   │   │   ├── plan.py              # Plan, PlanStep
 │   │   │   ├── telemetry.py         # TelemetryEvent
 │   │   │   ├── anomaly.py           # Anomaly, AnomalyType, AnomalySeverity
-│   │   │   └── environment.py       # Environment, Grid, Cell, TerrainType
+│   │   │   ├── environment.py       # Environment, Grid, Cell, TerrainType
+│   │   │   └── comm.py              # UplinkKind, UplinkCommand (V4 — in-memory only, no db_models/repository)
 │   │   ├── db_models/               # SQLAlchemy ORM table definitions (V2)
 │   │   │   ├── mission.py           # MissionRow, ObjectiveRow
 │   │   │   ├── rover.py             # RoverRow
@@ -368,16 +374,28 @@ space-missions-control-center/
 │   │   │   ├── service.py           # Async execution loop
 │   │   │   ├── executor.py          # Per-command executor
 │   │   │   ├── rover_registry.py    # In-process rover registry
-│   │   │   └── anomaly_engine.py    # Probabilistic failure injection
+│   │   │   ├── anomaly_engine.py    # Probabilistic failure injection
+│   │   │   ├── fault_protection.py  # FaultProtectionEngine — tiered anomaly recovery (V4)
+│   │   │   ├── terrain_events.py    # TerrainEventEngine — geyser/fracture/frost cycles (V4)
+│   │   │   └── aegis.py             # Autonomous target scoring + selection (V4)
 │   │   ├── telemetry_service/
-│   │   │   └── router.py            # REST + WebSocket endpoints
-│   │   └── explainability_service/
-│   │       ├── router.py
-│   │       └── service.py           # Decision log + LLM context builder
+│   │   │   ├── router.py            # REST + WebSocket endpoints
+│   │   │   ├── service.py           # Anomaly-resolution side effects, shared with comm_service (V4)
+│   │   │   └── store.py             # V2 compatibility shim — logic now lives in core/repositories/
+│   │   ├── explainability_service/
+│   │   │   ├── router.py
+│   │   │   └── service.py           # Decision log + LLM context builder
+│   │   └── comm_service/            # Communication windows (V4)
+│   │       ├── router.py            # GET /comm/status, GET /comm/{mission_id}/queue
+│   │       ├── service.py           # CommWindowService — gate/enqueue/flush
+│   │       ├── windows.py           # Pure wall-clock comm-window schedule
+│   │       └── schemas.py           # CommStatusResponse, UplinkResult
 │   └── tests/
 │       ├── conftest.py              # In-memory SQLite fixture for tests
 │       ├── test_astar.py            # A* pathfinding unit tests
 │       ├── test_simulation.py       # Rover model + anomaly engine
+│       ├── test_aegis.py            # AEGIS scoring + target selection (V4)
+│       ├── test_comm_windows.py     # Comm window schedule + gate/queue/flush (V4)
 │       └── test_mission_api.py      # Full API integration tests
 │
 ├── frontend/                        # React + TypeScript
@@ -396,6 +414,7 @@ space-missions-control-center/
 │       │   ├── useMissions.ts       # React Query hooks (includes useMultiAgentPlan V3)
 │       │   ├── useTelemetry.ts      # WebSocket hook
 │       │   ├── useExplain.ts        # Claude SSE streaming hook (V3)
+│       │   ├── useComm.ts           # Comm window status + uplink queue polling (V4)
 │       │   └── useTheme.ts          # Theme toggle + localStorage persistence
 │       ├── components/
 │       │   ├── GridMap.tsx          # SVG 2D terrain grid (elevation tooltip V3)
@@ -432,16 +451,22 @@ Full OpenAPI spec at http://localhost:8000/openapi.json when the server is runni
 | PATCH | `/api/v1/missions/{id}` | Update mission name / description |
 | DELETE | `/api/v1/missions/{id}` | Delete mission and all related data |
 | POST | `/api/v1/missions/{id}/start` | Start mission |
+| POST | `/api/v1/missions/{id}/complete` | Mark mission complete |
 | GET | `/api/v1/missions/{id}/environment` | Get terrain grid |
 | POST | `/api/v1/planning/auto` | Generate A* or RL plan for a rover (`planner` field: `astar`\|`rl`) |
 | POST | `/api/v1/planning/manual` | Create manual plan |
+| GET | `/api/v1/planning/{plan_id}` | Get plan by id |
+| GET | `/api/v1/planning/mission/{mission_id}` | Get the current plan for a mission |
 | POST | `/api/v1/planning/multi-agent` | Coordinate all rovers — distribute objectives and generate one plan per rover |
 | GET | `/api/v1/planning/mission/{id}/all` | List all plans for a mission (one per rover) |
+| GET | `/api/v1/planning/environments/{id}/science-heatmap` | Per-cell science scores for an environment (V4) |
 | POST | `/api/v1/simulation/rovers` | Spawn rover |
 | GET | `/api/v1/simulation/rovers` | List rovers (filter by `?mission_id=`) |
+| GET | `/api/v1/simulation/rovers/{rover_id}` | Get a single rover |
 | POST | `/api/v1/simulation/run` | Execute plan (async, multiple concurrent plans allowed) |
 | POST | `/api/v1/simulation/{id}/stop` | Stop all running plans for a mission |
 | GET | `/api/v1/simulation/{id}/status` | Simulation status |
+| GET | `/api/v1/simulation/rovers/{rover_id}/aegis-proposal` | Get the rover's pending AEGIS target proposal, if any |
 | WS | `/api/v1/telemetry/ws/{mission_id}` | Real-time telemetry stream |
 | GET | `/api/v1/telemetry/events/{mission_id}` | Telemetry history |
 | GET | `/api/v1/telemetry/anomalies/{mission_id}` | Mission anomalies |
@@ -480,7 +505,7 @@ All settings are in `backend/core/config.py` and driven by environment variables
 | `ROVER_MOVE_COST` | `10.0` | Battery per cell × terrain multiplier |
 | `ANTHROPIC_API_KEY` | _(unset)_ | Enables Claude streaming explanations in Explain tab |
 | `CLAUDE_MODEL` | `claude-sonnet-4-6` | Claude model used for explanations |
-| `CLAUDE_MAX_TOKENS` | `1024` | Max tokens per Claude response |
+| `CLAUDE_MAX_TOKENS` | `4096` | Max tokens per Claude response |
 | `RL_EPISODE_BUDGET` | `500` | Max steps the RL planner may explore per plan |
 | `RL_WEIGHT_TARGET` | `2.0` | RL value function: target proximity weight |
 | `RL_WEIGHT_TERRAIN` | `1.0` | RL value function: terrain cost penalty |
@@ -497,6 +522,7 @@ All settings are in `backend/core/config.py` and driven by environment variables
 | `TERRAIN_FRACTURE_PROB_PER_TICK` | `0.004` | Probability a crevasse cell spreads to an adjacent flat/ice cell per step |
 | `TERRAIN_FROST_PERIOD_TICKS` | `20` | Full Enceladus day/night cycle length in simulation steps (night = half) |
 | `TERRAIN_FROST_COST_FACTOR` | `1.4` | Movement cost multiplier applied to flat/ice cells during night frost |
+| `AEGIS_MAX_AUTO_OBJECTIVES` | `10` | Cap on self-generated AEGIS objectives per mission run (`0` = unlimited) |
 | `COMM_SLOT_SECONDS` | `60` | Seconds between successive uplink window openings |
 | `COMM_WINDOW_DURATION_SECONDS` | `15` | How long each uplink window stays open |
 
@@ -542,17 +568,20 @@ REDIS_URL=redis://localhost:6379/0   # default; override if needed
 
 ## Anomaly System
 
-The `AnomalyEngine` injects probabilistic failures during execution. Probabilities are physics-informed in V3 — slope stress and ambient temperature affect failure rates.
+The `AnomalyEngine` injects probabilistic failures during execution (probabilities are physics-informed in V3 — slope stress and ambient temperature affect failure rates). Recovery from an injected anomaly is governed by the `FaultProtectionEngine` (V4, `services/simulation_service/fault_protection.py`), which tracks a per-rover consecutive-anomaly streak and escalates through retry → reverse/replan → safe mode.
 
-| Anomaly | Trigger | Effect |
-|---|---|---|
-| `wheel_stuck` | Rocky/crater terrain; probability scales with cell elevation (slope stress) | Halts rover (STUCK state); auto-retried after 1 s hold |
-| `comm_loss` | Random (1% per step) | COMM_LOST state — halts plan |
-| `energy_spike` | Random; probability doubles below 60 K (thermal contraction) | −10% battery |
-| `geyser_proximity` | Geyser terrain cell (25% per step) | Halts rover (STUCK state) |
-| `low_battery` | Battery < 15% | Alert only — no state change |
+| Anomaly | Trigger | Immediate effect | FPS response (V4) |
+|---|---|---|---|
+| `wheel_stuck` | Rocky/crater terrain; probability scales with cell elevation (slope stress) | Rover enters `STUCK` state | Retry up to `FPS_WHEEL_STUCK_RETRY_LIMIT`, then reverse one cell, then safe mode |
+| `comm_loss` | Random (1% per step) | Rover enters `COMM_LOST` state | Retry (brief wait) up to `FPS_COMM_LOSS_RETRY_LIMIT`, then safe mode |
+| `energy_spike` | Random; probability doubles below 60 K (thermal contraction) | −10% battery | Continue — drain already applied, no further action |
+| `geyser_proximity` | Active geyser terrain cell (25% per step) | Rover enters `STUCK` state | Replan around the hazard, or safe mode if no path exists |
+| `low_battery` | Battery < 15% (always `CRITICAL` severity) | Alert only — no state change | Safe mode |
+| `path_blocked` | Synthesised (not by `AnomalyEngine`) when a V4 terrain event — ice fracture or geyser eruption — blocks a cell on the rover's planned path | None | Replan, or safe mode if no path exists |
+| `sensor_fault` | Not currently triggered by any engine — reserved for the Instrument Health Dashboard (V5 backlog #9) | — | Continue (rule already defined, unused until #9 ships) |
+| `unknown` | Not currently raised — generic fallback type | — | Retry once, then safe mode |
 
-Severity levels: `low`, `medium`, `high`, `critical`. All anomalies are persisted and dismissible via the UI or `PATCH /api/v1/telemetry/anomalies/{id}/resolve`.
+Severity levels: `low`, `medium`, `high`, `critical`. All anomalies are persisted and dismissible via the UI or `PATCH /api/v1/telemetry/anomalies/{id}/resolve` — gated by the comm window (V4) when ground control dismisses one manually; FPS's own automatic responses above are not gated.
 
 ---
 
