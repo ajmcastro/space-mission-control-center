@@ -897,3 +897,11 @@ All remaining Features Backlog items — none started. Ordered by a mix of imple
 | 6 | Resource-Aware Mission Scheduling (#2) | Bigger structural change — touches the planner and adds sol-level scheduling; more invasive than the above |
 | 7 | Multi-Mission Fleet View (#14) | Needs new cross-mission aggregation endpoints; valuable but orthogonal to the per-mission core loop |
 | 8 | Mission Replay & What-If Analysis (#12) | Highest cost — needs a mission/rover/environment checkpoint system and branching re-simulation, well beyond today's simple Timeline replay |
+
+## AI-assisted development
+
+This project was designed and implemented by Antonio de Castro, with AI-assisted development using Claude Code (model Sonnet4.6 / Sonnet5).
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
