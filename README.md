@@ -1,6 +1,6 @@
 # Enceladus Mission Control Center
 
-A production-grade space mission control system simulating rover operations on Enceladus — Saturn's ocean moon. Features a physics-based digital twin simulation engine, A* and RL mission planning, multi-agent rover coordination, real-time telemetry streaming, anomaly detection, Claude-powered explanations, timeline playback, and a 3D terrain visualiser.
+A production-grade space mission control system simulating rover operations on Enceladus — Saturn's ocean moon. Features a physics-based digital twin simulation engine, A* and RL mission planning with multi-agent coordination, autonomous fault protection and AEGIS-style self-directed target selection, fog-of-war exploration of a geologically active terrain (geyser cycles, ice fractures, day/night frost), and light-delay-constrained communication windows — alongside real-time telemetry streaming, Claude-powered explanations, timeline playback, and a 3D terrain visualiser.
 
 ---
 
