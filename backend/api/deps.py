@@ -11,6 +11,7 @@ from services.mission_service.service import MissionService
 from services.planning_service.service import PlanningService
 from services.simulation_service.service import SimulationService
 from services.explainability_service.service import ExplainabilityService
+from services.comm_service.service import CommWindowService
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
@@ -32,3 +33,7 @@ def get_simulation_service(request: Request) -> SimulationService:
 
 def get_explainability_service(request: Request) -> ExplainabilityService:
     return request.app.state.explainability_service
+
+
+def get_comm_service(request: Request) -> CommWindowService:
+    return request.app.state.comm_service

@@ -7,6 +7,7 @@ import {
   useUpdateMission, useDeleteMission, useMultiAgentPlan, missionPlansKey,
 } from '@/hooks/useMissions';
 import { useLLMExplain } from '@/hooks/useExplain';
+import { useCommStatus, useUplinkQueue } from '@/hooks/useComm';
 import { telemetryApi } from '@/services/api';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTelemetrySocket } from '@/hooks/useTelemetry';
@@ -39,6 +40,37 @@ function ActionBtn({ label, onClick, disabled, color = 'var(--btn-primary)' }: {
     >
       {label}
     </button>
+  );
+}
+
+function CommStatusBadge({ missionId }: { missionId: string }) {
+  const { data: status } = useCommStatus();
+  const { data: queue = [] } = useUplinkQueue(missionId);
+  if (!status) return null;
+  const color = status.open ? '#22c55e' : '#f59e0b';
+  return (
+    <div
+      title={
+        status.open
+          ? `Uplink window open — closes in ${status.seconds_until_close}s`
+          : `Uplink window closed — opens in ${status.seconds_until_next_open}s`
+      }
+      style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        background: color + '22', border: `1px solid ${color}55`,
+        borderRadius: 12, padding: '4px 10px', fontSize: 11, fontWeight: 700, color,
+      }}
+    >
+      📡 {status.open ? 'UPLINK OPEN' : `CLOSED · ${Math.ceil(status.seconds_until_next_open)}s`}
+      {queue.length > 0 && (
+        <span style={{
+          background: color, color: '#fff', borderRadius: 10,
+          padding: '0 6px', fontSize: 10,
+        }}>
+          {queue.length} queued
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -488,6 +520,7 @@ export function MissionView() {
   const deleteMission  = useDeleteMission();
 
   const [resolveError, setResolveError]     = useState<string | null>(null);
+  const [uplinkNotice, setUplinkNotice]     = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete]   = useState(false);
 
   const [roverName, setRoverName]           = useState('');
@@ -505,9 +538,14 @@ export function MissionView() {
 
   const dismissAll = useMutation({
     mutationFn: () => telemetryApi.dismissAll(missionId),
-    onSuccess: () => {
+    onSuccess: (data) => {
+      if (data.queued.length > 0) {
+        setUplinkNotice(`${data.queued.length} dismissal(s) queued — comm window closed, will send at next uplink`);
+        setTimeout(() => setUplinkNotice(null), 5000);
+      }
       qc.invalidateQueries({ queryKey: ['anomalies', missionId] });
       qc.invalidateQueries({ queryKey: ['rovers', missionId] });
+      qc.invalidateQueries({ queryKey: ['comm-queue', missionId] });
     },
   });
 
@@ -520,6 +558,15 @@ export function MissionView() {
         old.map(a => a.id === id ? { ...a, resolution: 'ignored' } : a)
       );
       return { prev };
+    },
+    onSuccess: (result, _id, ctx) => {
+      if (!result.delivered) {
+        // Not actually resolved yet — revert the optimistic flip until the uplink is delivered.
+        if (ctx?.prev) qc.setQueryData(['anomalies', missionId], ctx.prev);
+        setUplinkNotice('Dismissal queued — comm window closed, will send at next uplink');
+        setTimeout(() => setUplinkNotice(null), 5000);
+      }
+      qc.invalidateQueries({ queryKey: ['comm-queue', missionId] });
     },
     onError: (_err, _id, ctx) => {
       if (ctx?.prev) qc.setQueryData(['anomalies', missionId], ctx.prev);
@@ -680,6 +727,7 @@ export function MissionView() {
         </div>
 
         <div style={{ display: 'flex', gap: 14, alignItems: 'center', marginLeft: 20 }}>
+          <CommStatusBadge missionId={missionId} />
           <span style={{
             background: (STATUS_COLORS[mission.status] ?? '#6b7280') + '33',
             color: STATUS_COLORS[mission.status] ?? '#6b7280',
@@ -1277,6 +1325,16 @@ export function MissionView() {
                     fontSize: 11, color: '#dc2626',
                   }}>
                     {resolveError}
+                  </div>
+                )}
+
+                {uplinkNotice && (
+                  <div style={{
+                    background: '#f59e0b18', border: '1px solid #f59e0b55',
+                    borderRadius: 6, padding: '6px 10px', marginBottom: 8,
+                    fontSize: 11, color: '#f59e0b',
+                  }}>
+                    📡 {uplinkNotice}
                   </div>
                 )}
 

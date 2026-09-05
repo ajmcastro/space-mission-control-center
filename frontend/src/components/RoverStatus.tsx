@@ -1,5 +1,6 @@
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { Rover, AutonomyLevel, AegisProposal } from '@/types';
+import type { Rover, AutonomyLevel, AegisProposal, UplinkResult } from '@/types';
 import { simulationApi } from '@/services/api';
 
 interface Props {
@@ -27,15 +28,24 @@ const AUTONOMY_COLORS: Record<AutonomyLevel, string> = {
 
 export function RoverStatus({ rover, missionId }: Props) {
   const qc = useQueryClient();
+  const [queuedNotice, setQueuedNotice] = useState<string | null>(null);
   const batteryColor =
     rover.battery_pct > 50 ? 'var(--accent-green)' :
     rover.battery_pct > 20 ? 'var(--accent-amber)' : 'var(--accent-red)';
 
+  function noteResult(result: UplinkResult, actionLabel: string) {
+    setQueuedNotice(
+      result.delivered ? null : `${actionLabel} queued — comm window closed, will send at next uplink`
+    );
+  }
+
   const setAutonomy = useMutation({
     mutationFn: (level: AutonomyLevel) => simulationApi.setAutonomy(rover.id, level),
-    onSuccess: () => {
+    onSuccess: (result) => {
+      noteResult(result, 'Autonomy change');
       qc.invalidateQueries({ queryKey: ['rovers'] });
       qc.invalidateQueries({ queryKey: ['simulation-status'] });
+      qc.invalidateQueries({ queryKey: ['comm-queue', missionId] });
     },
   });
 
@@ -49,16 +59,22 @@ export function RoverStatus({ rover, missionId }: Props) {
 
   const approveProposal = useMutation({
     mutationFn: () => simulationApi.approveAegisProposal(rover.id, missionId ?? ''),
-    onSuccess: () => {
+    onSuccess: (result) => {
+      noteResult(result, 'AEGIS approval');
       qc.invalidateQueries({ queryKey: ['aegis-proposal', rover.id] });
       qc.invalidateQueries({ queryKey: ['rovers'] });
       qc.invalidateQueries({ queryKey: ['mission'] });
+      qc.invalidateQueries({ queryKey: ['comm-queue', missionId] });
     },
   });
 
   const rejectProposal = useMutation({
     mutationFn: () => simulationApi.rejectAegisProposal(rover.id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['aegis-proposal', rover.id] }),
+    onSuccess: (result) => {
+      noteResult(result, 'AEGIS rejection');
+      qc.invalidateQueries({ queryKey: ['aegis-proposal', rover.id] });
+      qc.invalidateQueries({ queryKey: ['comm-queue', missionId] });
+    },
   });
 
   return (
@@ -80,6 +96,16 @@ export function RoverStatus({ rover, missionId }: Props) {
           {rover.state.replace('_', ' ')}
         </span>
       </div>
+
+      {queuedNotice && (
+        <div style={{
+          background: '#f59e0b22', border: '1px solid #f59e0b55',
+          borderRadius: 5, padding: '5px 8px', marginBottom: 8,
+          fontSize: 11, color: '#f59e0b',
+        }}>
+          📡 {queuedNotice}
+        </div>
+      )}
 
       {rover.state === 'safe_mode' && rover.safe_mode_reason && (
         <div style={{

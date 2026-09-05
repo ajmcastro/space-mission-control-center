@@ -18,12 +18,14 @@ from services.mission_service.service import MissionService
 from services.planning_service.service import PlanningService
 from services.simulation_service.service import SimulationService
 from services.explainability_service.service import ExplainabilityService
+from services.comm_service.service import CommWindowService
 
 from services.mission_service.router import router as mission_router
 from services.planning_service.router import router as planning_router
 from services.simulation_service.router import router as simulation_router
 from services.telemetry_service.router import router as telemetry_router
 from services.explainability_service.router import router as explain_router
+from services.comm_service.router import router as comm_router
 
 log = structlog.get_logger(__name__)
 
@@ -107,6 +109,21 @@ async def _event_persist_listener(bus: EventBus) -> None:
     await asyncio.gather(*[_listen(s) for s in streams])
 
 
+async def _comm_uplink_flusher(comm_service: CommWindowService) -> None:
+    """Deliver queued uplink commands once a second whenever a comm window is open.
+
+    Runs independently of any mission's plan-execution loop so a queued ground
+    command is delivered even if the rover that triggered it later enters
+    safe mode (which stops that mission's own tick loop).
+    """
+    while True:
+        try:
+            await comm_service.flush_ready()
+        except Exception:
+            log.exception("comm_uplink_flush_failed")
+        await asyncio.sleep(1.0)
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("startup", app=settings.app_name, version=settings.app_version)
@@ -138,6 +155,12 @@ async def lifespan(app: FastAPI):
     app.state.planning_service = PlanningService(bus)
     app.state.simulation_service = SimulationService(bus, AsyncSessionLocal)
     app.state.explainability_service = ExplainabilityService()
+    app.state.comm_service = CommWindowService(bus, AsyncSessionLocal)
+
+    # Comm window service needs the simulation service (autonomy/AEGIS) and the
+    # extracted anomaly-resolution logic to actually deliver a queued uplink.
+    from services.telemetry_service.service import resolve_anomaly as _resolve_anomaly
+    app.state.comm_service.wire(app.state.simulation_service, _resolve_anomaly)
 
     # Background listeners
     ws_task = asyncio.create_task(
@@ -146,12 +169,16 @@ async def lifespan(app: FastAPI):
     persist_task = asyncio.create_task(
         _event_persist_listener(bus), name="event-persist-listener"
     )
+    uplink_task = asyncio.create_task(
+        _comm_uplink_flusher(app.state.comm_service), name="comm-uplink-flusher"
+    )
 
     log.info("services_ready", bus=bus.__class__.__name__)
     yield
 
     ws_task.cancel()
     persist_task.cancel()
+    uplink_task.cancel()
     await bus.disconnect()
     log.info("shutdown")
 
@@ -179,6 +206,7 @@ app.include_router(planning_router, prefix="/api/v1")
 app.include_router(simulation_router, prefix="/api/v1")
 app.include_router(telemetry_router, prefix="/api/v1")
 app.include_router(explain_router, prefix="/api/v1")
+app.include_router(comm_router, prefix="/api/v1")
 
 
 @app.get("/", tags=["health"])

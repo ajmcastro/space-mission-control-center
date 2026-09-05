@@ -47,6 +47,10 @@ class AnomalyRepository:
         session.add(_to_row(anomaly))
         await session.flush()
 
+    async def get(self, session: AsyncSession, anomaly_id: str) -> Anomaly | None:
+        row = await session.get(AnomalyRow, anomaly_id)
+        return _to_domain(row) if row else None
+
     async def get_for_mission(
         self, session: AsyncSession, mission_id: str
     ) -> list[Anomaly]:

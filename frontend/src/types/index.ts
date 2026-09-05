@@ -174,3 +174,32 @@ export interface TelemetryEvent {
   battery_pct: number | null;
   payload: Record<string, unknown>;
 }
+
+// ─── Communication Windows (V4) ────────────────────────────────────────────
+
+export type UplinkKind = 'resolve_anomaly' | 'set_autonomy' | 'aegis_approve' | 'aegis_reject';
+
+export interface UplinkCommand {
+  id: string;
+  mission_id: string;
+  rover_id: string;
+  kind: UplinkKind;
+  payload: Record<string, unknown>;
+  queued_at: string;
+  delivered: boolean;
+  delivered_at: string | null;
+}
+
+export interface CommStatus {
+  open: boolean;
+  seconds_until_next_open: number;
+  seconds_until_close: number;
+  slot_seconds: number;
+  window_duration_seconds: number;
+}
+
+export interface UplinkResult {
+  delivered: boolean;
+  uplink: UplinkCommand | null;
+  result: Record<string, unknown> | null;
+}

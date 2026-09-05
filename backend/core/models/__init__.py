@@ -5,6 +5,7 @@ from .telemetry import TelemetryEvent, TelemetryType
 from .anomaly import Anomaly, AnomalyType, AnomalySeverity
 from .environment import Environment, Grid, Cell, TerrainType
 from .plan import Plan, PlanStep
+from .comm import UplinkKind, UplinkCommand
 
 __all__ = [
     "Mission", "MissionStatus", "Objective",
@@ -14,4 +15,5 @@ __all__ = [
     "Anomaly", "AnomalyType", "AnomalySeverity",
     "Environment", "Grid", "Cell", "TerrainType",
     "Plan", "PlanStep",
+    "UplinkKind", "UplinkCommand",
 ]

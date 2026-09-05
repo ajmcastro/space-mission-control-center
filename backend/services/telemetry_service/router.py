@@ -4,17 +4,18 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.models.telemetry import TelemetryEvent
-from core.models.anomaly import Anomaly, AnomalyResolution, AnomalyType
-from core.models.rover import RoverState
-from core.repositories import TelemetryRepository, AnomalyRepository, RoverRepository
+from core.models.anomaly import Anomaly, AnomalyResolution
+from core.models.comm import UplinkKind
+from core.repositories import TelemetryRepository, AnomalyRepository
 from core.events import MissionEvent, EventType
-from api.deps import get_session
+from api.deps import get_session, get_comm_service
+from services.comm_service.service import CommWindowService
+from services.comm_service.schemas import UplinkResult
 
 router = APIRouter(prefix="/telemetry", tags=["telemetry"])
 
 _telemetry_repo = TelemetryRepository()
 _anomaly_repo = AnomalyRepository()
-_rover_repo = RoverRepository()
 
 
 class ResolveAnomalyRequest(BaseModel):
@@ -94,64 +95,46 @@ async def get_mission_anomalies(
     return await _anomaly_repo.get_for_mission(session, mission_id)
 
 
-@router.post("/anomalies/{mission_id}/dismiss-all", response_model=list[Anomaly])
+@router.post("/anomalies/{mission_id}/dismiss-all")
 async def dismiss_all_anomalies(
     mission_id: str,
     session: AsyncSession = Depends(get_session),
-) -> list[Anomaly]:
-    """Resolve all pending anomalies for a mission as ignored."""
+    comm: CommWindowService = Depends(get_comm_service),
+) -> dict:
+    """Resolve all pending anomalies for a mission as ignored — each one individually
+    gated by the comm window, same as a single dismiss (see resolve_anomaly)."""
     anomalies = await _anomaly_repo.get_for_mission(session, mission_id)
-    resolved = []
+    results: list[UplinkResult] = []
     for a in anomalies:
         if a.resolution == AnomalyResolution.PENDING:
-            updated = await _anomaly_repo.resolve(session, a.id, AnomalyResolution.IGNORED.value)
-            if updated:
-                resolved.append(updated)
+            results.append(await comm.gate(
+                session, mission_id, a.rover_id, UplinkKind.RESOLVE_ANOMALY,
+                {"anomaly_id": a.id, "resolution": AnomalyResolution.IGNORED.value},
+            ))
     await session.commit()
-    return resolved
+    return {
+        "delivered": [r.result for r in results if r.delivered],
+        "queued": [r.uplink for r in results if not r.delivered],
+    }
 
 
-@router.patch("/anomalies/{anomaly_id}/resolve", response_model=Anomaly)
+@router.patch("/anomalies/{anomaly_id}/resolve", response_model=UplinkResult)
 async def resolve_anomaly(
     anomaly_id: str,
     body: ResolveAnomalyRequest,
     session: AsyncSession = Depends(get_session),
-) -> Anomaly:
-    anomaly = await _anomaly_repo.resolve(session, anomaly_id, body.resolution.value)
+    comm: CommWindowService = Depends(get_comm_service),
+) -> UplinkResult:
+    anomaly = await _anomaly_repo.get(session, anomaly_id)
     if not anomaly:
         raise HTTPException(404, f"Anomaly {anomaly_id} not found")
 
-    rover = await _rover_repo.get(session, anomaly.rover_id)
-    if rover:
-        # Dismissing a comm_loss restores the rover to IDLE so the operator can re-run the plan.
-        if anomaly.type == AnomalyType.COMM_LOSS and rover.state == RoverState.COMM_LOST:
-            rover.state = RoverState.IDLE
-            rover.anomaly_streak = 0
-            await _rover_repo.save(session, rover)
-
-        # Dismissing a low_battery triggers an emergency recharge to full capacity.
-        elif anomaly.type == AnomalyType.LOW_BATTERY:
-            rover.battery = rover.spec.max_battery
-            rover.state = RoverState.IDLE
-            rover.anomaly_streak = 0
-            await _rover_repo.save(session, rover)
-
-        # Exiting safe mode — reset FPS state so the operator can re-run the plan.
-        elif rover.state == RoverState.SAFE_MODE:
-            rover.state = RoverState.IDLE
-            rover.anomaly_streak = 0
-            rover.safe_mode_reason = None
-            await _rover_repo.save(session, rover)
-
-        # Ground-control override: dismiss any anomaly when rover is stuck.
-        # Restores IDLE so the operator can re-run the plan from the rover's current position.
-        elif rover.state == RoverState.STUCK:
-            rover.state = RoverState.IDLE
-            rover.anomaly_streak = 0
-            await _rover_repo.save(session, rover)
-
+    result = await comm.gate(
+        session, anomaly.mission_id, anomaly.rover_id, UplinkKind.RESOLVE_ANOMALY,
+        {"anomaly_id": anomaly_id, "resolution": body.resolution.value},
+    )
     await session.commit()
-    return anomaly
+    return result
 
 
 async def push_telemetry_event(event: MissionEvent) -> None:

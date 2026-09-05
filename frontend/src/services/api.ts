@@ -1,7 +1,7 @@
 import axios from 'axios';
 import type {
   Mission, Rover, Environment, Plan, Anomaly, TelemetryEvent,
-  AutonomyLevel, AegisProposal,
+  AutonomyLevel, AegisProposal, CommStatus, UplinkCommand, UplinkResult,
 } from '@/types';
 
 const http = axios.create({
@@ -71,15 +71,15 @@ export const simulationApi = {
   status: (missionId: string) =>
     http.get(`/simulation/${missionId}/status`).then(r => r.data),
   setAutonomy: (roverId: string, level: AutonomyLevel) =>
-    http.patch<Rover>(`/simulation/rovers/${roverId}/autonomy`, { level }).then(r => r.data),
+    http.patch<UplinkResult>(`/simulation/rovers/${roverId}/autonomy`, { level }).then(r => r.data),
   getAegisProposal: (roverId: string) =>
     http.get<AegisProposal>(`/simulation/rovers/${roverId}/aegis-proposal`).then(r => r.data),
   approveAegisProposal: (roverId: string, missionId: string) =>
-    http.post(`/simulation/rovers/${roverId}/aegis-proposal/approve`, null, {
+    http.post<UplinkResult>(`/simulation/rovers/${roverId}/aegis-proposal/approve`, null, {
       params: { mission_id: missionId },
     }).then(r => r.data),
   rejectAegisProposal: (roverId: string) =>
-    http.post(`/simulation/rovers/${roverId}/aegis-proposal/reject`).then(r => r.data),
+    http.post<UplinkResult>(`/simulation/rovers/${roverId}/aegis-proposal/reject`).then(r => r.data),
 };
 
 // ─── Telemetry ───────────────────────────────────────────────────────────────
@@ -92,9 +92,16 @@ export const telemetryApi = {
     return http.get<Anomaly[]>(url).then(r => r.data);
   },
   resolveAnomaly: (anomalyId: string, resolution = 'ignored') =>
-    http.patch<Anomaly>(`/telemetry/anomalies/${anomalyId}/resolve`, { resolution }).then(r => r.data),
+    http.patch<UplinkResult>(`/telemetry/anomalies/${anomalyId}/resolve`, { resolution }).then(r => r.data),
   dismissAll: (missionId: string) =>
-    http.post<Anomaly[]>(`/telemetry/anomalies/${missionId}/dismiss-all`).then(r => r.data),
+    http.post<{ delivered: Anomaly[]; queued: UplinkCommand[] }>(`/telemetry/anomalies/${missionId}/dismiss-all`).then(r => r.data),
+};
+
+// ─── Communication Windows ───────────────────────────────────────────────────
+
+export const commApi = {
+  status: () => http.get<CommStatus>('/comm/status').then(r => r.data),
+  queue: (missionId: string) => http.get<UplinkCommand[]>(`/comm/${missionId}/queue`).then(r => r.data),
 };
 
 // ─── Explainability ──────────────────────────────────────────────────────────

@@ -2,7 +2,10 @@ from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.models.rover import Rover
-from api.deps import get_simulation_service, get_session
+from core.models.comm import UplinkKind
+from api.deps import get_simulation_service, get_session, get_comm_service
+from services.comm_service.service import CommWindowService
+from services.comm_service.schemas import UplinkResult
 from .service import SimulationService
 from .schemas import SpawnRoverRequest, RunPlanRequest, SetAutonomyRequest
 
@@ -69,17 +72,22 @@ async def simulation_status(
     return await svc.get_simulation_status(session, mission_id)
 
 
-@router.patch("/rovers/{rover_id}/autonomy", response_model=Rover)
+@router.patch("/rovers/{rover_id}/autonomy", response_model=UplinkResult)
 async def set_autonomy(
     rover_id: str,
     req: SetAutonomyRequest,
     svc: SimulationService = Depends(get_simulation_service),
     session: AsyncSession = Depends(get_session),
-) -> Rover:
-    rover = await svc.set_autonomy_level(session, rover_id, req.level)
-    if not rover:
+    comm: CommWindowService = Depends(get_comm_service),
+) -> UplinkResult:
+    rover = await svc.get_rover(session, rover_id)
+    if not rover or not rover.mission_id:
         raise HTTPException(404, f"Rover {rover_id} not found")
-    return rover
+    result = await comm.gate(
+        session, rover.mission_id, rover_id, UplinkKind.SET_AUTONOMY, {"level": req.level.value}
+    )
+    await session.commit()
+    return result
 
 
 @router.get("/rovers/{rover_id}/aegis-proposal")
@@ -99,25 +107,33 @@ async def get_aegis_proposal(
     }
 
 
-@router.post("/rovers/{rover_id}/aegis-proposal/approve")
+@router.post("/rovers/{rover_id}/aegis-proposal/approve", response_model=UplinkResult)
 async def approve_aegis_proposal(
     rover_id: str,
     mission_id: str,
     svc: SimulationService = Depends(get_simulation_service),
     session: AsyncSession = Depends(get_session),
-) -> dict:
-    ok = await svc.approve_aegis_proposal(session, mission_id, rover_id)
-    if not ok:
+    comm: CommWindowService = Depends(get_comm_service),
+) -> UplinkResult:
+    if not svc.get_aegis_proposal(rover_id):
         raise HTTPException(404, "No pending AEGIS proposal for this rover")
-    return {"approved": True, "rover_id": rover_id}
+    result = await comm.gate(session, mission_id, rover_id, UplinkKind.AEGIS_APPROVE, {})
+    await session.commit()
+    return result
 
 
-@router.post("/rovers/{rover_id}/aegis-proposal/reject")
+@router.post("/rovers/{rover_id}/aegis-proposal/reject", response_model=UplinkResult)
 async def reject_aegis_proposal(
     rover_id: str,
     svc: SimulationService = Depends(get_simulation_service),
-) -> dict:
-    ok = await svc.reject_aegis_proposal(rover_id)
-    if not ok:
+    session: AsyncSession = Depends(get_session),
+    comm: CommWindowService = Depends(get_comm_service),
+) -> UplinkResult:
+    if not svc.get_aegis_proposal(rover_id):
         raise HTTPException(404, "No pending AEGIS proposal for this rover")
-    return {"rejected": True, "rover_id": rover_id}
+    rover = await svc.get_rover(session, rover_id)
+    if not rover or not rover.mission_id:
+        raise HTTPException(404, f"Rover {rover_id} not found")
+    result = await comm.gate(session, rover.mission_id, rover_id, UplinkKind.AEGIS_REJECT, {})
+    await session.commit()
+    return result

@@ -1,8 +1,47 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { telemetryApi } from '@/services/api';
+import { useCommStatus } from '@/hooks/useComm';
 import { GridMap } from './GridMap';
-import type { Rover, Environment } from '@/types';
+import type { Rover, Environment, TelemetryEvent } from '@/types';
+
+const BAND_SEGMENTS = 120;
+
+/** Comm window state at a given event's timestamp, computed client-side from the
+ * same wall-clock schedule the backend uses (see services/comm_service/windows.py). */
+function isWindowOpenAt(timestampMs: number, slotSeconds: number, windowDurationSeconds: number): boolean {
+  const phase = (timestampMs / 1000) % slotSeconds;
+  return phase < windowDurationSeconds;
+}
+
+function CommWindowBands({
+  events, slotSeconds, windowDurationSeconds,
+}: {
+  events: TelemetryEvent[]; slotSeconds: number; windowDurationSeconds: number;
+}) {
+  const buckets = useMemo(() => {
+    if (events.length === 0) return [];
+    const n = Math.min(BAND_SEGMENTS, events.length);
+    const size = events.length / n;
+    return Array.from({ length: n }, (_, i) => {
+      const e = events[Math.min(events.length - 1, Math.floor(i * size))];
+      return isWindowOpenAt(new Date(e.timestamp).getTime(), slotSeconds, windowDurationSeconds);
+    });
+  }, [events, slotSeconds, windowDurationSeconds]);
+
+  if (buckets.length === 0) return null;
+
+  return (
+    <div
+      title="Comm window state across this replay (green = uplink window open)"
+      style={{ display: 'flex', height: 6, borderRadius: 3, overflow: 'hidden', marginBottom: 6 }}
+    >
+      {buckets.map((open, i) => (
+        <div key={i} style={{ flex: 1, background: open ? '#22c55e' : '#f59e0b55' }} />
+      ))}
+    </div>
+  );
+}
 
 interface Props {
   missionId: string;
@@ -29,6 +68,8 @@ export function TimelinePlayer({ missionId, rovers, environment, targetCells = [
     queryFn: () => telemetryApi.getEvents(missionId, 5000),
     staleTime: 30_000,
   });
+
+  const { data: commStatus } = useCommStatus();
 
   // Only position events carry x/y; sort chronologically.
   const events = useMemo(
@@ -147,6 +188,20 @@ export function TimelinePlayer({ missionId, rovers, environment, targetCells = [
                 {currentEvent.battery_pct.toFixed(1)}% battery
               </span>
             )}
+            {commStatus && (
+              <span style={{
+                fontWeight: 600,
+                color: isWindowOpenAt(
+                  new Date(currentEvent.timestamp).getTime(),
+                  commStatus.slot_seconds, commStatus.window_duration_seconds,
+                ) ? '#22c55e' : '#f59e0b',
+              }}>
+                📡 {isWindowOpenAt(
+                  new Date(currentEvent.timestamp).getTime(),
+                  commStatus.slot_seconds, commStatus.window_duration_seconds,
+                ) ? 'uplink open' : 'uplink closed'}
+              </span>
+            )}
           </>
         )}
       </div>
@@ -170,6 +225,15 @@ export function TimelinePlayer({ missionId, rovers, environment, targetCells = [
           {SPEEDS.map(s => <option key={s.ms} value={s.ms}>{s.label}</option>)}
         </select>
       </div>
+
+      {/* Comm window bands */}
+      {commStatus && (
+        <CommWindowBands
+          events={events}
+          slotSeconds={commStatus.slot_seconds}
+          windowDurationSeconds={commStatus.window_duration_seconds}
+        />
+      )}
 
       {/* Scrubber */}
       <input

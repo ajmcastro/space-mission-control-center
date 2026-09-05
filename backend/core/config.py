@@ -81,5 +81,9 @@ class Settings(BaseSettings):
     # AEGIS Autonomous Target Selection (V4)
     aegis_max_auto_objectives: int = 10   # cap on self-generated objectives per mission run
 
+    # Communication Windows (V4)
+    comm_slot_seconds: float = 60.0           # seconds between successive uplink window openings
+    comm_window_duration_seconds: float = 15.0  # how long each uplink window stays open
+
 
 settings = Settings()

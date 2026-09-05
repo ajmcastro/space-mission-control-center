@@ -51,6 +51,10 @@ class EventType(str, Enum):
     AEGIS_TARGET_SELECTED = "aegis.target_selected"   # rover autonomously selected a new objective
     AEGIS_TARGET_PROPOSED = "aegis.target_proposed"   # supervised rover awaiting approval
 
+    # Communication Windows (V4)
+    UPLINK_QUEUED    = "comm.uplink_queued"    # ground command held pending the next comm window
+    UPLINK_DELIVERED = "comm.uplink_delivered" # queued ground command executed on window open
+
 
 class MissionEvent(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
