@@ -848,30 +848,6 @@ Possible extensions include:
 
 ---
 
-## GitHub Topics
-
-Suggested repository topics:
-
-```text
-space-mission-control
-space-robotics
-autonomous-systems
-robotics
-rover
-digital-twin
-mission-planning
-multi-agent-systems
-reinforcement-learning
-path-planning
-fastapi
-react
-websocket
-simulation
-agentic-ai
-```
-
----
-
 ## License
 
 This project is licensed under the **MIT License**.
