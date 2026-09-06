@@ -282,7 +282,7 @@ Fault handling is recorded in the telemetry/event history so that controllers ca
 
 ### AEGIS-Style Science Autonomy
 
-The project includes an AEGIS-inspired autonomous science capability.
+The project includes an AEGIS (Autonomous Exploration for Gathering Increased Science) inspired autonomous science capability.
 
 When operating with sufficient autonomy, a rover can evaluate science-value information and generate new objectives after its assigned work is complete.
 
